@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Stroom
+Comment=Lightweight torrent + Usenet download client
+Exec=@BINDIR@/stroom
+Icon=stroom
+Terminal=false
+Categories=Network;FileTransfer;
+StartupNotify=true
