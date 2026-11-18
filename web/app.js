@@ -440,8 +440,8 @@ function wireDragDrop() {
     if (!interesting(e)) return;
     e.preventDefault(); depth++; overlay.classList.remove("hidden");
   });
-  window.addEventListener("dragleave", () => {
-    if (--depth <= 0) { depth = 0; overlay.classList.add("hidden"); }
+  window.addEventListener("dragleave", (e) => {
+    if ((e.clientX === 0 && e.clientY === 0) || --depth <= 0) { depth = 0; overlay.classList.add("hidden"); }
   });
   window.addEventListener("dragover", (e) => { if (interesting(e)) e.preventDefault(); });
   window.addEventListener("drop", async (e) => {

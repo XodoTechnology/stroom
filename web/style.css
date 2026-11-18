@@ -51,7 +51,7 @@ button.mini { padding: 2px 7px; font-size: 11px; margin-right: 3px; }
 .empty { color: var(--dim); text-align: center; padding: 40px; }
 
 .modal { position: fixed; inset: 0; background: rgba(0,0,0,.6); display: flex; align-items: center; justify-content: center; z-index: 20; }
-.modal.hidden, .toast.hidden { display: none; }
+.hidden { display: none !important; }
 .modal-box { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 20px; width: 420px; }
 .modal-box h3 { margin-bottom: 12px; }
 .tabs { display: flex; gap: 6px; margin-bottom: 12px; }
