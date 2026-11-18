@@ -30,11 +30,6 @@ Linux, WebView2 on Windows, WKWebView on macOS). Requirements:
 webkit is missing. On headless machines (no DISPLAY) it serves the web UI only.
 Set `STROOM_NO_BROWSER=1` to skip opening anything.
 
-### Logo & icons
-
-`logo.svg` is the source mark; `icons/` has PNG renders (used by the desktop
-entry, installer, and web UI favicon).
-
 ### Updates
 
 Stroom checks GitHub releases for new versions (once a day, configurable via
