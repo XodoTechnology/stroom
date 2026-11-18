@@ -20,8 +20,8 @@ jobs:
           # windows/arm64 cross-compiled on windows-2022 (pure Go, no cgo)
           - { goos: windows, goarch: amd64, webview: false, cgo: "0", runner: windows-2022 }
           - { goos: windows, goarch: arm64, webview: false, cgo: "0", runner: windows-2022 }
-          - { goos: darwin,  goarch: amd64, webview: true,  cgo: "1", runner: macos-13 }
-          - { goos: darwin,  goarch: arm64, webview: true,  cgo: "1", runner: macos-14 }
+          - { goos: darwin,  goarch: amd64, webview: false, cgo: "0", runner: macos-15 }
+          - { goos: darwin,  goarch: arm64, webview: true,  cgo: "1", runner: macos-15 }
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
