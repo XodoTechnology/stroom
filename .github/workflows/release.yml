@@ -17,8 +17,8 @@ jobs:
           # webview_go needs pkg-config webkit2gtk-4.0 -> only on Ubuntu 22.04
           - { goos: linux,   goarch: amd64, webview: true,  cgo: "1", runner: ubuntu-22.04 }
           - { goos: linux,   goarch: arm64, webview: true,  cgo: "1", runner: ubuntu-22.04-arm }
-          # windows/arm64 cross-compiled on windows-2022 (pure Go, no cgo)
-          - { goos: windows, goarch: amd64, webview: false, cgo: "0", runner: windows-2022 }
+          # windows/amd64: webview needs cgo+C++ (MinGW on runner); arm64 can't cgo cross-compile
+          - { goos: windows, goarch: amd64, webview: true,  cgo: "1", runner: windows-2022 }
           - { goos: windows, goarch: arm64, webview: false, cgo: "0", runner: windows-2022 }
           - { goos: darwin,  goarch: amd64, webview: false, cgo: "0", runner: macos-15 }
           - { goos: darwin,  goarch: arm64, webview: true,  cgo: "1", runner: macos-15 }
@@ -33,6 +33,27 @@ jobs:
       - name: Install webkit2gtk (linux)
         if: matrix.goos == 'linux'
         run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.0-dev
+
+      - name: Embed icon + version info (windows)
+        if: matrix.goos == 'windows'
+        shell: bash
+        run: |
+          VER="${GITHUB_REF_NAME#v}"
+          go install github.com/josephspurrier/goversioninfo/cmd/goversioninfo@v1.7.0
+          IFS=. read -r MA MI PA <<< "$VER"; PA=${PA:-0}
+          goversioninfo -icon icons/icon.ico \
+            -company "Xodo Technology" -product-name "Stroom" \
+            -file-version "$VER" -product-version "$VER" \
+            -ver-major "$MA" -ver-minor "$MI" -ver-patch "$PA" \
+            -description "Lightweight torrent + Usenet client" \
+            -copyright "Copyright (c) 2026 Xodo Technology" \
+            -original-name "stroom.exe" -internal-name "stroom" \
+            -o "stroom_${{ matrix.goos }}_${{ matrix.goarch }}.syso"
+
+      - name: C++ toolchain (windows webview)
+        if: matrix.goos == 'windows' && matrix.webview
+        shell: bash
+        run: command -v g++ >/dev/null || choco install mingw -y
 
       - name: Build
         shell: bash

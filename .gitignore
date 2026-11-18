@@ -3,3 +3,4 @@ data/
 *.test
 screenshot.png
 strom
+*.syso

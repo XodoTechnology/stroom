@@ -23,8 +23,8 @@
 Linux, WebView2 on Windows, WKWebView on macOS). Requirements:
 
 - **Linux**: `libwebkit2gtk-4.0-dev` (or `-4.1-dev`) at build time
-- **Windows/macOS arm64**: nothing extra
-- **macOS Intel / Linux arm64 without webkit**: browser UI fallback
+- **Windows/macOS arm64, Linux**: nothing extra
+- **Windows arm64, macOS Intel**: browser UI fallback (no cgo cross-compile)
 
 `build.sh` detects this automatically and falls back to the browser UI when
 webkit is missing. On headless machines (no DISPLAY) it serves the web UI only.
