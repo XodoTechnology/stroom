@@ -39,16 +39,39 @@ jobs:
         shell: bash
         run: |
           VER="${GITHUB_REF_NAME#v}"
+          IFS=. read -r MA MI PA <<< "$VER"; MA=${MA:-0}; MI=${MI:-0}; PA=${PA:-0}
           go install github.com/josephspurrier/goversioninfo/cmd/goversioninfo@v1.7.0
-          IFS=. read -r MA MI PA <<< "$VER"; PA=${PA:-0}
-          goversioninfo -icon icons/icon.ico \
-            -company "Xodo Technology" -product-name "Stroom" \
-            -file-version "$VER" -product-version "$VER" \
-            -ver-major "$MA" -ver-minor "$MI" -ver-patch "$PA" \
-            -description "Lightweight torrent + Usenet client" \
-            -copyright "Copyright (c) 2026 Xodo Technology" \
-            -original-name "stroom.exe" -internal-name "stroom" \
-            -o "stroom_${{ matrix.goos }}_${{ matrix.goarch }}.syso"
+          cat > versioninfo.json <<EOF
+          {
+            "FixedFileInfo": {
+              "FileVersion":    { "Major": $MA, "Minor": $MI, "Patch": $PA, "Build": 0 },
+              "ProductVersion": { "Major": $MA, "Minor": $MI, "Patch": $PA, "Build": 0 },
+              "FileFlagsMask": "3f",
+              "FileFlags ": "00",
+              "FileOS": "040004",
+              "FileType": "01",
+              "FileSubType": "00"
+            },
+            "StringFileInfo": {
+              "Comments": "Lightweight torrent + Usenet client",
+              "CompanyName": "Xodo Technology",
+              "FileDescription": "Stroom - torrent and Usenet download client",
+              "FileVersion": "$VER",
+              "InternalName": "stroom",
+              "LegalCopyright": "Copyright (c) 2026 Xodo Technology",
+              "LegalTrademarks": "",
+              "OriginalFilename": "stroom.exe",
+              "PrivateBuild": "",
+              "ProductName": "Stroom",
+              "ProductVersion": "$VER",
+              "SpecialBuild": ""
+            },
+            "VarFileInfo": {
+              "Translation": { "LangID": "0409", "CharsetID": "04B0" }
+            }
+          }
+          EOF
+          goversioninfo -icon icons/icon.ico -platform-specific versioninfo.json
 
       - name: C++ toolchain (windows webview)
         if: matrix.goos == 'windows' && matrix.webview
