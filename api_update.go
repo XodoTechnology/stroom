@@ -12,10 +12,6 @@ const updateCheckInterval = 24 * time.Hour
 // maybeAutoUpdateCheck runs a background update check if due. Never blocks.
 func (a *App) maybeAutoUpdateCheck() {
 	cfg := a.configSnapshot()
-	repo := repoForUpdate(cfg)
-	if repo == "" {
-		return
-	}
 	if cfg.LastUpdateCheck != "" {
 		if t, err := time.Parse(time.RFC3339, cfg.LastUpdateCheck); err == nil && time.Since(t) < updateCheckInterval {
 			return
@@ -30,8 +26,7 @@ func (a *App) maybeAutoUpdateCheck() {
 
 // refreshUpdate performs a check and caches the result.
 func (a *App) refreshUpdate(ctx context.Context, markChecked bool) *updateInfo {
-	cfg := a.configSnapshot()
-	info, err := checkForUpdate(ctx, repoForUpdate(cfg), a.version)
+	info, err := checkForUpdate(ctx, updateRepo(), a.version)
 	if err != nil && info.Error == "" {
 		info.Error = err.Error()
 	}
@@ -55,7 +50,7 @@ func (a *App) updateStatus() *updateInfo {
 		cp := *a.upd
 		return &cp
 	}
-	return &updateInfo{Configured: repoForUpdate(a.configSnapshot()) != "", Current: a.version}
+	return &updateInfo{Configured: true, Current: a.version}
 }
 
 // ---------- API ----------

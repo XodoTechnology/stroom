@@ -88,9 +88,20 @@ func runServe(args []string) error {
 		return err
 	}
 
-	api := newAPIServer(app, app.Config.ListenAddr)
+	// Web UI disabled → bind an ephemeral loopback port instead of the
+	// configured address, so no discoverable web UI is exposed. The
+	// native window still works (it navigates to this URL).
+	listenAddr := app.Config.ListenAddr
+	if app.Config.DisableWebUI {
+		listenAddr = "127.0.0.1:0"
+	}
+	ln, err := net.Listen("tcp", listenAddr)
+	if err != nil {
+		return err
+	}
+	api := newAPIServer(app, listenAddr)
 	go func() {
-		if err := api.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := api.server.Serve(ln); err != nil && err != http.ErrServerClosed {
 			logErr("http: %v", err)
 		}
 	}()
@@ -98,8 +109,17 @@ func runServe(args []string) error {
 	defer watchCancel()
 	go app.watchLoop(watchCtx)
 	go app.maybeAutoUpdateCheck()
-	logOut("Stroom listening on http://%s  (download dir: %s)", app.Config.ListenAddr, app.Config.DownloadDir)
-	uiURL := "http://" + displayAddr(app.Config.ListenAddr)
+	// Record the bound addr so `stroom add` can find this instance.
+	uiAddr := displayAddr(ln.Addr().String())
+	apiAddrFile := filepath.Join(app.DataDir, "api.addr")
+	_ = os.WriteFile(apiAddrFile, []byte(uiAddr+"\n"), 0o600)
+	defer os.Remove(apiAddrFile)
+	uiURL := "http://" + uiAddr
+	if app.Config.DisableWebUI {
+		logOut("Stroom web UI disabled — API on %s  (download dir: %s)", uiURL, app.Config.DownloadDir)
+	} else {
+		logOut("Stroom listening on %s  (download dir: %s)", uiURL, app.Config.DownloadDir)
+	}
 
 	waitForSignal := func() {
 		sig := make(chan os.Signal, 1)
@@ -130,7 +150,7 @@ func runServe(args []string) error {
 		}
 		// Window closed → fall through to graceful shutdown.
 	} else {
-		if os.Getenv("STROOM_NO_BROWSER") == "" {
+		if os.Getenv("STROOM_NO_BROWSER") == "" && !app.Config.DisableWebUI {
 			go func() {
 				time.Sleep(300 * time.Millisecond)
 				openBrowser(uiURL)

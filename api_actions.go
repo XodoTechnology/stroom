@@ -1,11 +1,14 @@
 package main
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"net/http"
 	"path/filepath"
 	"strings"
+
+	"github.com/anacrolix/torrent"
 )
 
 // resolveJobDir returns the on-disk dir for reveal, per kind.
@@ -155,6 +158,8 @@ func (a *apiServer) handleDetails(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, err.Error())
 		return
 	}
+	stats := t.Stats()
+	swarm := t.KnownSwarm()
 	info := map[string]any{
 		"hash":     id,
 		"name":     t.Name(),
@@ -165,6 +170,16 @@ func (a *apiServer) handleDetails(w http.ResponseWriter, r *http.Request) {
 		"pieces":   t.NumPieces(),
 		"complete": t.Complete(),
 		"seeding":  t.Seeding(),
+		"stats": map[string]any{
+			"totalPeers":     stats.TotalPeers,
+			"activePeers":    stats.ActivePeers,
+			"pendingPeers":   stats.PendingPeers,
+			"connectedSeeds": stats.ConnectedSeeders,
+			"halfOpen":       stats.HalfOpenPeers,
+			"piecesComplete": stats.PiecesComplete,
+		},
+		"peers":     peerList(swarm),
+		"peerCount": len(swarm),
 	}
 	if st != nil {
 		info["customName"] = st.CustomName
@@ -173,4 +188,30 @@ func (a *apiServer) handleDetails(w http.ResponseWriter, r *http.Request) {
 		info["addedAt"] = st.AddedAt
 	}
 	writeJSONResp(w, info)
+}
+
+// peerList returns a deduplicated, capped list of known swarm peers.
+func peerList(swarm []torrent.PeerInfo) []map[string]any {
+	const maxPeers = 1000
+	seen := map[string]bool{}
+	out := []map[string]any{}
+	for _, p := range swarm {
+		addr := p.Addr.String()
+		pid := hex.EncodeToString(p.Id[:])
+		key := addr + "|" + pid
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, map[string]any{
+			"addr": addr,
+			"id":   pid,
+			"src":  p.Source,
+			"enc":  p.SupportsEncryption,
+		})
+		if len(out) >= maxPeers {
+			break
+		}
+	}
+	return out
 }

@@ -30,10 +30,15 @@ Linux, WebView2 on Windows, WKWebView on macOS). Requirements:
 webkit is missing. On headless machines (no DISPLAY) it serves the web UI only.
 Set `STROOM_NO_BROWSER=1` to skip opening anything.
 
+To run **without any web UI** (native window only, nothing reachable on a
+fixed address), enable "Web UI" off in Settings — the app then binds an
+ephemeral loopback port just for the native window and `stroom add` still
+works via the recorded address.
+
 ### Updates
 
-Stroom checks GitHub releases for new versions (once a day, configurable via
-`updateRepo` in config or Settings → "Update repo"). When a newer release
+Stroom checks GitHub releases for new versions (once a day, always against the
+upstream `XodoTechnology/stroom` repo). When a newer release
 exists a banner appears in the UI; **Update** downloads the platform binary,
 verifies its SHA-256 against the release's `.sha256` asset, and swaps it in —
 restart to apply. CLI equivalent:

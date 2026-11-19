@@ -93,11 +93,10 @@ function renderTorrents(list) {
       (st === "error" ? `<span class="badge err">${esc(t.error || "err")}</span>` : "");
     const dl = t.downSpeed ? fmtSpeed(t.downSpeed) : "—";
     const ul = t.upSpeed ? fmtSpeed(t.upSpeed) : "—";
-    const pctTxt = t.size > 0 ? (100 * (t.done || 0) / t.size).toFixed(1) + "%" : "";
     return `<tr data-job="torrent:${esc(t.id)}">
       <td><div class="namecell" title="${esc(t.name)}">${badges}${esc(t.name)}</div></td>
       <td>${fmtBytes(t.size)}</td>
-      <td>${progBar(t.done || 0, t.size, st === "error")}<div class="dim" style="font-size:10px">${pctTxt}</div></td>
+      <td>${progBar(t.done || 0, t.size, st === "error")}</td>
       <td class="dim">${dl}</td><td class="dim">${ul}</td>
       <td>${t.peers ?? "—"}${t.seeds ? "/" + t.seeds : ""}</td><td>${fmtEta(t.eta)}</td>
       ${jobActionBtns("torrent", t.id, paused, st)}
@@ -119,11 +118,10 @@ function renderNZB(list) {
       (st === "error" ? `<span class="badge err">${esc(j.error || "err")}</span>` : "");
     const segTxt = j.segmentsTotal ? `${j.segmentsDone || 0}/${j.segmentsTotal}` : "—";
     const failTxt = j.segmentsFailed ? ` <span class="badge err">-${j.segmentsFailed} fail</span>` : "";
-    const pctTxt = j.totalBytes > 0 ? (100 * (j.doneBytes || 0) / j.totalBytes).toFixed(1) + "%" : "";
     return `<tr data-job="nzb:${esc(j.id)}">
       <td><div class="namecell" title="${esc(j.name)}">${badges}${esc(j.name)}</div></td>
       <td>${fmtBytes(j.totalBytes)}</td>
-      <td>${progBar(j.doneBytes || 0, j.totalBytes, st === "error")}<div class="dim" style="font-size:10px">${pctTxt}</div></td>
+      <td>${progBar(j.doneBytes || 0, j.totalBytes, st === "error")}</td>
       <td class="dim">${fmtSpeed(j.downSpeed)}</td>
       <td>${segTxt}${failTxt}</td>
       <td>—</td>
@@ -178,7 +176,7 @@ function loadSettingsIntoForm(c) {
   f.enablePex.checked = !!c.enablePex;
   f.uiToken.value = "";
   f.uiToken.placeholder = c.hasToken ? "•••• (set)" : "leave empty for no auth";
-  f.updateRepo.value = c.updateRepo || "";
+  f.webUI.checked = !c.disableWebUI;
   f.watchDir.value = c.watchDir || "";
   state.settingsLoaded = true; settingsLoaded = true;
 }
@@ -195,6 +193,18 @@ function wireEvents() {
     const kind = key.slice(0, i), id = key.slice(i + 1);
     showCtx(e.clientX, e.clientY, ctxItems(kind, id, findJob(kind, id)));
   });
+  // single click on a job row → details dialog
+  document.addEventListener("click", (e) => {
+    if (e.target.closest("button,select,a,input,textarea")) return;
+    const tr = e.target.closest("tr[data-job]");
+    if (!tr) return;
+    const key = tr.dataset.job, i = key.indexOf(":");
+    const kind = key.slice(0, i), id = key.slice(i + 1);
+    showDetails(kind, id, findJob(kind, id));
+  });
+
+  // details dialog tabs
+  document.querySelectorAll("#detTabs [data-dtab]").forEach(b => b.onclick = () => setDetTab(b.dataset.dtab));
   document.addEventListener("click", hideCtx);
   document.addEventListener("scroll", hideCtx, true);
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") hideCtx(); });
@@ -365,7 +375,7 @@ function wireEvents() {
     };
     const tok = fd.get("uiToken");
     if (tok) body.uiToken = tok; // empty = keep existing token
-    body.updateRepo = fd.get("updateRepo") || "";
+    body.disableWebUI = fd.get("webUI") !== "on";
     body.watchDir = fd.get("watchDir") || "";
     try {
       const r = await postJSON("/api/settings", body);
@@ -492,12 +502,10 @@ async function toggleFiles(kind, id) {
   if (state.expanded[key]) restoreOne(kind, id);
 }
 
-function filesPanelHTML(kind, id) {
-  const data = state.filesCache[fileKey(kind, id)];
-  if (!data || !data.files) return "";
+function fileRowsHTML(kind, id, files) {
   const isT = kind === "torrent";
   const prioName = { 0: "skip", 1: "normal", 2: "high" };
-  const rows = data.files.map(f => {
+  return (files || []).map(f => {
     const pct = f.size > 0 ? (100 * (f.done || 0) / f.size).toFixed(0) + "%" : "—";
     const complete = f.size > 0 && f.done >= f.size;
     let prio = "";
@@ -514,6 +522,13 @@ function filesPanelHTML(kind, id) {
     return `<tr><td class="fname" title="${esc(f.path || f.name)}">${esc(f.path || f.name)}</td>
       <td>${fmtBytes(f.size)}</td><td>${fmtBytes(f.done)}</td><td>${pct}</td><td>${seg}${prio}</td><td>${dl}</td></tr>`;
   }).join("");
+}
+
+function filesPanelHTML(kind, id) {
+  const data = state.filesCache[fileKey(kind, id)];
+  if (!data || !data.files) return "";
+  const isT = kind === "torrent";
+  const rows = fileRowsHTML(kind, id, data.files);
   return `<tr class="files-row" data-ts="${Date.now()}"><td colspan="20"><table class="filetable">
     <thead><tr><th>Name</th><th>Size</th><th>Done</th><th>%</th><th>${isT ? "Priority" : "Segments"}</th><th></th></tr></thead>
     <tbody>${rows}</tbody></table></td></tr>`;
@@ -630,28 +645,120 @@ async function removeJob(kind, id, delFiles) {
   catch (e) { toast(e.message); }
 }
 
+// ---------- details modal ----------
+let detJob = null;
+const DET_SRC = { Tr: "tracker", I: "incoming", X: "pex", Hg: "dht", Ha: "dht", M: "direct", C: "utp" };
+const detTabs = { info: () => $("#detInfo"), files: () => $("#detFiles"), peers: () => $("#detPeers") };
+
+function setDetTab(t) {
+  document.querySelectorAll("#detTabs [data-dtab]").forEach(b => b.classList.toggle("active", b.dataset.dtab === t));
+  for (const [k, el] of Object.entries(detTabs)) el().classList.toggle("active", k === t);
+}
+
 async function showDetails(kind, id, job) {
-  const lines = [
-    `Name: ${job.name || ""}`, `ID: ${id}`, `Status: ${job.status || ""}`,
-    `Size: ${fmtBytes(job.size ?? job.totalBytes)}`,
-    `Progress: ${((job.progress ?? 0) * 100).toFixed(1)}%`,
-  ];
-  if (kind === "torrent") {
-    try {
-      const d = await api(`/api/jobs/torrent/${id}/details`);
-      lines.push(`Dir: ${d.dir || "—"}`, `Pieces: ${d.pieces ?? "—"}`,
-        `Max conns: ${d.maxConns || "default"}`, `Added: ${d.addedAt || "—"}`,
-        `Trackers: ${(d.trackers || []).length}`);
-      if (d.trackers && d.trackers.length) lines.push("", "Trackers:", ...d.trackers.map(t => "  " + t));
-    } catch (e) { lines.push("(details unavailable: " + e.message + ")"); }
-  } else {
-    lines.push(`Server: ${job.serverName || job.serverID || "—"}`,
-      `Dir: ${job.dir || "—"}`,
-      `Segments: ${job.segmentsDone || 0}/${job.segmentsTotal || 0}`,
-      `Added: ${job.addedAt || ""}`);
-  }
-  $("#detailsBody").textContent = lines.join("\n");
+  detJob = { kind, id };
+  $("#detName").textContent = job.name || job.id || id;
+  $("#dtPeersTab").style.display = kind === "torrent" ? "" : "none";
+  setDetTab("info");
+  $("#detInfo").innerHTML = `<div class="dim">loading…</div>`;
+  $("#detFiles").innerHTML = "";
+  $("#detPeers").innerHTML = "";
   $("#detailsModal").classList.remove("hidden");
+  const [info, files] = await Promise.all([
+    kind === "torrent"
+      ? api(`/api/jobs/torrent/${id}/details`).catch(e => ({ error: e.message }))
+      : Promise.resolve(null),
+    api(`/api/jobs/${kind}/${id}/files`).catch(e => ({ error: e.message })),
+  ]);
+  if (!detJob || detJob.kind !== kind || detJob.id !== id) return; // switched jobs
+  state.filesCache[fileKey(kind, id)] = files;
+  renderDetInfo(kind, id, job, info);
+  renderDetFiles(kind, id, files);
+  if (kind === "torrent" && info && !info.error) renderDetPeers(info);
+}
+
+function detRow(k, v) { return `<dt>${esc(k)}</dt><dd>${v}</dd>`; }
+
+function renderDetInfo(kind, id, job, info) {
+  const el = $("#detInfo");
+  if (kind === "nzb") {
+    const seg = job.segmentsTotal ? `${job.segmentsDone || 0}/${job.segmentsTotal} segments` +
+      (job.segmentsFailed ? ` (${job.segmentsFailed} failed)` : "") : "—";
+    el.innerHTML = `<dl class="det-grid">` +
+      detRow("Status", esc(job.status || "—")) +
+      detRow("Progress", `${((job.progress || 0) * 100).toFixed(1)}%`) +
+      detRow("Size", fmtBytes(job.totalBytes)) +
+      detRow("Downloaded", fmtBytes(job.doneBytes)) +
+      detRow("Speed", fmtSpeed(job.downSpeed)) +
+      detRow("Segments", esc(seg)) +
+      detRow("Server", esc(job.serverName || job.serverID || "—")) +
+      detRow("Directory", esc(job.dir || "—")) +
+      detRow("Added", esc(job.addedAt ? new Date(job.addedAt).toLocaleString() : "—")) +
+      (job.error ? detRow("Error", `<span class="badge err">${esc(job.error)}</span>`) : "") +
+      detRow("ID", `<code>${esc(id)}</code>`) +
+      `</dl>`;
+    return;
+  }
+  if (!info || info.error) {
+    el.innerHTML = `<div class="dim">details unavailable: ${esc(info && info.error || "unknown")}</div>` +
+      `<dl class="det-grid">` + detRow("Status", esc(job.status || "—")) + detRow("ID", `<code>${esc(id)}</code>`) + `</dl>`;
+    return;
+  }
+  const st = info.stats || {};
+  const pctTxt = info.size > 0 ? (100 * ((job.done || 0) / info.size)).toFixed(1) + "%" : "—";
+  const trackers = (info.trackers || []).map(t => `<li>${esc(t)}</li>`).join("");
+  el.innerHTML = `<dl class="det-grid">` +
+    detRow("Status", esc(job.status || (info.seeding ? "seeding" : "downloading"))) +
+    detRow("Progress", pctTxt) +
+    detRow("Size", fmtBytes(info.size)) +
+    detRow("Downloaded", fmtBytes(job.done || 0)) +
+    detRow("Download", fmtSpeed(job.downSpeed)) +
+    detRow("Upload", fmtSpeed(job.upSpeed)) +
+    detRow("ETA", fmtEta(job.eta)) +
+    detRow("Peers", `${st.activePeers ?? "—"} active · ${st.pendingPeers ?? 0} pending · ${st.connectedSeeds ?? 0} seeds`) +
+    detRow("Swarm", `${info.peerCount ?? (info.peers || []).length} known`) +
+    detRow("Pieces", `${st.piecesComplete ?? "—"}/${info.pieces ?? "—"}`) +
+    detRow("Max connections", info.maxConns ? info.maxConns : "default") +
+    detRow("Directory", esc(info.dir || "—")) +
+    detRow("Added", esc(info.addedAt ? new Date(info.addedAt).toLocaleString() : "—")) +
+    detRow("Info hash", `<code>${esc(id)}</code>`) +
+    `</dl>` +
+    (trackers ? `<div class="det-sec">Trackers</div><ul class="det-list">${trackers}</ul>` : "");
+}
+
+function renderDetFiles(kind, id, files) {
+  const el = $("#detFiles");
+  if (!files || files.error) {
+    el.innerHTML = `<div class="dim">files unavailable: ${esc(files && files.error || "unknown")}</div>`;
+    return;
+  }
+  const isT = kind === "torrent";
+  const rows = fileRowsHTML(kind, id, files.files);
+  el.innerHTML = `<table class="filetable"><thead><tr>
+    <th>Name</th><th>Size</th><th>Done</th><th>%</th><th>${isT ? "Priority" : "Segments"}</th><th></th>
+    </tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+function renderDetPeers(info) {
+  const el = $("#detPeers");
+  const peers = (info.peers || []).slice().sort((a, b) => a.addr.localeCompare(b.addr));
+  const total = info.peerCount || peers.length;
+  if (!peers.length) {
+    el.innerHTML = `<div class="dim">No peers known yet — the swarm list appears once trackers/DHT respond.</div>`;
+    return;
+  }
+  const maxShow = 500;
+  const shown = peers.slice(0, maxShow);
+  const rows = shown.map(p => `<tr>
+    <td><code>${esc(p.addr)}</code></td>
+    <td class="dim" title="${esc(p.id)}"><code>${esc(p.id.slice(0, 16))}…</code></td>
+    <td>${esc(DET_SRC[p.src] || p.src || "—")}</td>
+    <td>${p.enc ? "yes" : "—"}</td>
+  </tr>`).join("");
+  el.innerHTML = `<table class="filetable"><thead><tr>
+    <th>Address</th><th>Peer ID</th><th>Source</th><th>Enc</th>
+    </tr></thead><tbody>${rows}</tbody></table>` +
+    (total > shown.length ? `<div class="dim" style="padding:6px">…and ${total - shown.length} more</div>` : "");
 }
 
 // ---------- boot + SSE ----------

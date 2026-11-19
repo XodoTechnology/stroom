@@ -116,7 +116,7 @@ type publicConfig struct {
 	UploadLimit       int64  `json:"uploadLimit"`
 	NZBMaxConnections int    `json:"nzbMaxConnections"`
 	HasToken          bool   `json:"hasToken"`
-	UpdateRepo        string `json:"updateRepo,omitempty"`
+	DisableWebUI      bool   `json:"disableWebUI"`
 	WatchDir          string `json:"watchDir,omitempty"`
 }
 
@@ -129,7 +129,7 @@ func (a *apiServer) pubConfig() publicConfig {
 		DownloadLimit: c.DownloadLimit, UploadLimit: c.UploadLimit,
 		NZBMaxConnections: c.NZBMaxConnections,
 		HasToken:          c.UIToken != "",
-		UpdateRepo:        c.UpdateRepo,
+		DisableWebUI:      c.DisableWebUI,
 		WatchDir:          c.WatchDir,
 	}
 }

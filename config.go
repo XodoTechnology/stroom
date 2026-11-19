@@ -54,8 +54,9 @@ type Config struct {
 	NNTPServers []NNTPServer `json:"nntpServers"`
 	// Watch folder: auto-add .torrent/.nzb files dropped here.
 	WatchDir string `json:"watchDir,omitempty"`
-	// GitHub repo "owner/name" for update checks. Empty = disabled.
-	UpdateRepo string `json:"updateRepo,omitempty"`
+	// Disable the web UI: the app then only serves the API on an
+	// ephemeral loopback port for the native window (no browser UI).
+	DisableWebUI bool `json:"disableWebUI,omitempty"`
 	// Last time an update check ran (RFC3339), for daily throttling.
 	LastUpdateCheck string `json:"lastUpdateCheck,omitempty"`
 }

@@ -250,7 +250,7 @@ func (a *apiServer) handleSettingsSet(w http.ResponseWriter, r *http.Request) {
 		UploadLimit       *int64  `json:"uploadLimit"`
 		NZBMaxConnections *int    `json:"nzbMaxConnections"`
 		UIToken           *string `json:"uiToken"`
-		UpdateRepo        *string `json:"updateRepo"`
+		DisableWebUI      *bool   `json:"disableWebUI"`
 		WatchDir          *string `json:"watchDir"`
 	}
 	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil {
@@ -291,8 +291,9 @@ func (a *apiServer) handleSettingsSet(w http.ResponseWriter, r *http.Request) {
 	if req.UIToken != nil {
 		cfg.UIToken = *req.UIToken
 	}
-	if req.UpdateRepo != nil {
-		cfg.UpdateRepo = *req.UpdateRepo
+	if req.DisableWebUI != nil {
+		cfg.DisableWebUI = *req.DisableWebUI
+		restart = append(restart, "disableWebUI")
 	}
 	if req.WatchDir != nil {
 		cfg.WatchDir = *req.WatchDir

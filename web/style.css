@@ -108,3 +108,20 @@ tr:hover .expbtn { opacity: 1; }
 .ctx-item.danger:hover { background: #3a2020; }
 .ctx-sep { height: 1px; background: var(--border); margin: 4px 0; }
 .ctx-item.dim-item { color: var(--dim); cursor: default; }
+
+/* details dialog */
+.det-box { width: 720px; max-width: 92vw; }
+.det-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.det-head h3 { margin-bottom: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dtabs { display: flex; gap: 2px; margin: 10px 0 4px; border-bottom: 1px solid var(--border); }
+.dtabs button { background: none; border: none; border-bottom: 2px solid transparent; border-radius: 0; color: var(--dim); padding: 6px 14px; font-size: 13px; }
+.dtabs button:hover { color: var(--text); border-color: transparent; }
+.dtabs button.active { color: var(--text); border-bottom-color: var(--accent); }
+.dtab { display: none; max-height: 55vh; overflow: auto; padding-top: 8px; }
+.dtab.active { display: block; }
+.det-grid { display: grid; grid-template-columns: 150px 1fr; gap: 4px 14px; font-size: 13px; }
+.det-grid dt { color: var(--dim); }
+.det-grid dd { margin: 0; word-break: break-all; }
+.det-sec { margin-top: 12px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .5px; color: var(--dim); }
+.det-list { margin: 6px 0 0; padding-left: 18px; font-size: 12px; color: var(--dim); max-height: 160px; overflow: auto; }
+.det-list li { word-break: break-all; }

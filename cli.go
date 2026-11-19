@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
@@ -90,10 +91,15 @@ func openBrowser(url string) {
 
 // runAdd talks to a running instance's API.
 func runAdd(args []string) error {
-	var addr, serverID, typ string
+	var addr, serverID, typ, dataFlag string
 	var positional []string
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
+		case "-data":
+			i++
+			if i < len(args) {
+				dataFlag = args[i]
+			}
 		case "-addr":
 			i++
 			if i < len(args) {
@@ -118,10 +124,28 @@ func runAdd(args []string) error {
 		return fmt.Errorf("add: no uri or file given")
 	}
 	target := positional[0]
+	if addr == "" {
+		addr = defaultAPIAddr(dataFlag)
+	}
 	return addViaAPI(addr, target, serverID, typ)
 }
 
 // addViaAPI sends an add request to a running instance.
+// defaultAPIAddr finds the running instance's API address: the api.addr
+// file the server writes at startup (covers custom -addr and the
+// ephemeral port used when the web UI is disabled), else :8080.
+func defaultAPIAddr(dataDir string) string {
+	if dataDir == "" {
+		dataDir = resolveDataDir("")
+	}
+	if b, err := os.ReadFile(filepath.Join(dataDir, "api.addr")); err == nil {
+		if s := strings.TrimSpace(string(b)); s != "" {
+			return s
+		}
+	}
+	return "127.0.0.1:8080"
+}
+
 func addViaAPI(addr, target, serverID, typ string) error {
 	if addr == "" {
 		addr = "127.0.0.1:8080"
@@ -215,14 +239,10 @@ func runUpdate(args []string) error {
 			checkOnly = true
 		}
 	}
-	app, err := newApp(nil)
-	if err != nil {
+	if _, err := newApp(nil); err != nil {
 		return err
 	}
-	repo := repoForUpdate(app.Config)
-	if repo == "" {
-		return fmt.Errorf("no update repo configured (set updateRepo in config or $STROOM_REPO)")
-	}
+	repo := updateRepo()
 	fmt.Printf("checking %s for updates (current %s)...\n", repo, version)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()

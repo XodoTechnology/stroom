@@ -291,13 +291,6 @@ func copyFile(src, dst string) error {
 	return err
 }
 
-// repoForUpdate resolves the configured update repo (config > env).
-func repoForUpdate(cfg Config) string {
-	if cfg.UpdateRepo != "" {
-		return cfg.UpdateRepo
-	}
-	if repo := os.Getenv("STROOM_REPO"); repo != "" {
-		return repo
-	}
-	return "XodoTechnology/stroom" // public upstream repo
-}
+// updateRepo is the fixed upstream repo updates are pulled from.
+// Not user-configurable — releases always come from our repo.
+func updateRepo() string { return "XodoTechnology/stroom" }
