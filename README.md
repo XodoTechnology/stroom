@@ -57,7 +57,13 @@ STROOM_REPO=you/stroom ./install.sh
 ```
 
 `install.sh` puts the binary in `~/.local/bin`, adds a Linux `.desktop` entry
-and icon, and prints a PATH hint. Windows: download the `.exe` release asset.
+and icon, and prints a PATH hint.
+
+Release assets include proper installers: **`stroom-X.Y.Z-setup.exe`** (Windows,
+per-user NSIS installer with Start Menu + desktop shortcuts and uninstaller),
+**`stroom_X.Y.Z_amd64.deb`** (Debian/Ubuntu/Mint, installs to `/usr/bin` with
+menu entry + icon), and `install.sh` for everything else. macOS: download the
+binary and run it (Gatekeeper: right-click → Open the first time).
 
 Data lives in `~/.stroom` (config, state), downloads in `~/Downloads/Stroom`.
 Override with flags: `-addr`, `-data`, `-dir`, or env `STROOM_DATA`.

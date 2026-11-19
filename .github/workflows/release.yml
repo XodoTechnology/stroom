@@ -88,23 +88,57 @@ jobs:
           TAGS=""
           if [ "${{ matrix.webview }}" = "true" ]; then TAGS="-tags webview"; fi
           EXT=""
-          if [ "${{ matrix.goos }}" = "windows" ]; then EXT=".exe"; fi
-          go build $TAGS -trimpath -ldflags="-s -w -X main.version=${{ github.ref_name }}" \
+          LDFLAGS="-s -w -X main.version=${{ github.ref_name }}"
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            EXT=".exe"
+            # GUI subsystem -> no console window; attachParentConsole() keeps CLI working
+            LDFLAGS="$LDFLAGS -H windowsgui"
+          fi
+          go build $TAGS -trimpath -ldflags="$LDFLAGS" \
             -o "stroom-${{ matrix.goos }}-${{ matrix.goarch }}${EXT}" .
+
+      - name: NSIS installer (windows amd64)
+        if: matrix.goos == 'windows' && matrix.goarch == 'amd64'
+        shell: bash
+        run: |
+          choco install nsis -y
+          VER="${GITHUB_REF_NAME#v}"
+          mkdir -p pkg
+          cp "stroom-windows-amd64.exe" installer.nsi pkg/
+          cp icons/icon.ico pkg/icon.ico
+          (cd pkg && makensis -DSTROOM_VERSION="$VER" -DSTROOM_EXE="stroom-windows-amd64.exe" installer.nsi)
+          mv "pkg/stroom-${VER}-setup.exe" .
+
+      - name: Debian package (linux)
+        if: matrix.goos == 'linux'
+        shell: bash
+        run: |
+          VER="${GITHUB_REF_NAME#v}"
+          ARCH="${{ matrix.goarch }}"
+          ROOT="pkgroot"
+          mkdir -p "$ROOT/DEBIAN" "$ROOT/usr/bin" "$ROOT/usr/share/applications" "$ROOT/usr/share/icons/hicolor/256x256/apps"
+          cp "stroom-linux-${ARCH}" "$ROOT/usr/bin/stroom"
+          sed "s|@BINDIR@|/usr/bin|g" stroom.desktop > "$ROOT/usr/share/applications/stroom.desktop"
+          cp icons/icon-256.png "$ROOT/usr/share/icons/hicolor/256x256/apps/stroom.png"
+          printf 'Package: stroom\nVersion: %s\nSection: net\nPriority: optional\nArchitecture: %s\nMaintainer: Xodo Technology\nDescription: Lightweight BitTorrent + Usenet download client\n Single-binary torrent and NZB client with a native window and web UI.\n' "$VER" "$ARCH" > "$ROOT/DEBIAN/control"
+          chmod 755 "$ROOT/usr/bin/stroom"
+          dpkg-deb --build --root-owner-group "$ROOT" "stroom_${VER}_${ARCH}.deb"
 
       - name: Checksum
         shell: bash
         run: |
-          EXT=""
-          if [ "${{ matrix.goos }}" = "windows" ]; then EXT=".exe"; fi
-          F="stroom-${{ matrix.goos }}-${{ matrix.goarch }}${EXT}"
-          sha256sum "$F" | awk -v f="$F" '{print $1"  "f}' > "$F.sha256"
+          find . -maxdepth 1 -type f ! -name "*.sha256" | while read -r file; do
+            sum=$(sha256sum "$file" | cut -d" " -f1)
+            echo "$sum  $(basename "$file")" > "$file.sha256"
+          done
 
       - uses: actions/upload-artifact@v4
         with:
           name: stroom-${{ matrix.goos }}-${{ matrix.goarch }}
           path: |
             stroom-${{ matrix.goos }}-${{ matrix.goarch }}*
+            *.deb
+            *-setup.exe*
             icons/icon-512.png
             logo.svg
 

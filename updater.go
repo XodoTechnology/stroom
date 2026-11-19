@@ -296,5 +296,8 @@ func repoForUpdate(cfg Config) string {
 	if cfg.UpdateRepo != "" {
 		return cfg.UpdateRepo
 	}
-	return os.Getenv("STROOM_REPO")
+	if repo := os.Getenv("STROOM_REPO"); repo != "" {
+		return repo
+	}
+	return "XodoTechnology/stroom" // public upstream repo
 }

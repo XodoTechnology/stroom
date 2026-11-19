@@ -58,7 +58,7 @@ function render() {
   drawSpeedGraph();
   checkNotifications(d);
   restoreExpanded();
-  $("#verTag").textContent = d.version ? "v" + d.version : "";
+  $("#verTag").textContent = d.version ? "v" + d.version.replace(/^v+/, "") : "";
   if (!state.settingsLoaded) loadSettingsIntoForm(d.config);
 }
 

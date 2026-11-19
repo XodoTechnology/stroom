@@ -28,6 +28,7 @@ flags for serve:
 }
 
 func main() {
+	attachParentConsole() // windows: restore stdio when run from a terminal
 	args := os.Args[1:]
 	cmd := "serve"
 	if len(args) > 0 && len(args[0]) > 0 && args[0][0] != '-' {
