@@ -13,8 +13,8 @@ import (
 
 // NZBSegment is one article reference inside an NZB file element.
 type NZBSegment struct {
-	Number    int    `xml:"number,attr" json:"n"`
-	Bytes     int64  `xml:"bytes,attr" json:"b,omitempty"`
+	Number int   `xml:"number,attr" json:"n"`
+	Bytes  int64 `xml:"bytes,attr" json:"b,omitempty"`
 	// NZB spec: <segment bytes="N" number="N">message-id@host</segment>
 	// — the id is the element's character data, not a child element.
 	MessageID string `xml:",chardata" json:"id"`
@@ -60,7 +60,7 @@ func ParseNZB(data []byte) (*NZBDoc, error) {
 			return nil, fmt.Errorf("gzip: %w", err)
 		}
 		defer zr.Close()
-		data, err = io.ReadAll(io.LimitReader(zr, 256<<20))
+		data, err = io.ReadAll(io.LimitReader(zr, 128<<20))
 		if err != nil {
 			return nil, fmt.Errorf("gunzip: %w", err)
 		}
@@ -71,6 +71,9 @@ func ParseNZB(data []byte) (*NZBDoc, error) {
 		if i := bytes.Index(trimmed, []byte("<nzb")); i >= 0 {
 			trimmed = trimmed[i:]
 		}
+	}
+	if len(trimmed) > 128<<20 {
+		return nil, fmt.Errorf("nzb too large")
 	}
 	var doc nzbXML
 	dec := xml.NewDecoder(bytes.NewReader(trimmed))
@@ -83,6 +86,14 @@ func ParseNZB(data []byte) (*NZBDoc, error) {
 	}
 	if len(doc.Files) == 0 {
 		return nil, fmt.Errorf("nzb contains no files")
+	}
+	const maxSegments = 500000
+	totalSeg := 0
+	for i := range doc.Files {
+		totalSeg += len(doc.Files[i].Segments)
+		if totalSeg > maxSegments {
+			return nil, fmt.Errorf("nzb exceeds %d segments", maxSegments)
+		}
 	}
 
 	out := &NZBDoc{}

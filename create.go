@@ -113,6 +113,54 @@ func hashPieces(path string, size, plen int64) ([]byte, error) {
 	return hashes, nil
 }
 
+// hashPiecesMulti hashes piece boundaries over the concatenated byte stream
+// of all files in order, per BEP 3 multi-file semantics.
+func hashPiecesMulti(files []fileEntry, plen int64) ([]byte, error) {
+	h := sha1.New()
+	var hashes []byte
+	buf := make([]byte, 0, plen)
+	chunk := make([]byte, 64<<10)
+	flush := func() {
+		if len(buf) > 0 {
+			h.Reset()
+			h.Write(buf)
+			hashes = append(hashes, h.Sum(nil)...)
+			buf = buf[:0]
+		}
+	}
+	for _, fe := range files {
+		f, err := os.Open(fe.abs)
+		if err != nil {
+			return nil, err
+		}
+		for {
+			n, rerr := f.Read(chunk)
+			data := chunk[:n]
+			for len(data) > 0 {
+				need := int(plen) - len(buf)
+				take := n
+				if len(data) < take {
+					take = len(data)
+				}
+				if take > need {
+					take = need
+				}
+				buf = append(buf, data[:take]...)
+				data = data[take:]
+				if int64(len(buf)) == plen {
+					flush()
+				}
+			}
+			if rerr != nil {
+				break
+			}
+		}
+		f.Close()
+	}
+	flush()
+	return hashes, nil
+}
+
 func minInt64(a, b int64) int64 {
 	if a < b {
 		return a
@@ -178,25 +226,28 @@ func createTorrentFile(srcPath, outPath string, trackers []string) error {
 			"piece length": bint(plen),
 		}
 	} else {
+		// BEP 3: one "pieces" string over the concatenated stream of all
+		// files; each file entry carries "path" (list of components).
+		hashes, err := hashPiecesMulti(files, plen)
+		if err != nil {
+			return err
+		}
 		var flist blist
 		for _, fe := range files {
-			hashes, err := hashPieces(fe.abs, fe.size, plen)
-			if err != nil {
-				return err
-			}
 			var parts blist
 			for _, p := range strings.Split(fe.rel, "/") {
 				parts = append(parts, bstr(p))
 			}
 			flist = append(flist, bdict{
 				"length":     bint(fe.size),
-				"pieces":     bstr(hashes),
+				"path":       parts,
 				"path.utf-8": parts,
 			})
 		}
 		info = bdict{
 			"name":         bstr(name),
 			"piece length": bint(plen),
+			"pieces":       bstr(hashes),
 			"files":        flist,
 		}
 	}

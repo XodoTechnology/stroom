@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"io"
+	"mime"
 	"net/http"
 	"path/filepath"
 	"strings"
@@ -27,6 +28,10 @@ func (a *apiServer) jobDir(kind, id string) (string, error) {
 
 // POST /api/jobs/{kind}/{id}/reveal — open containing folder on the server.
 func (a *apiServer) handleReveal(w http.ResponseWriter, r *http.Request) {
+	if !a.app.GUI {
+		writeErr(w, http.StatusForbidden, "desktop actions disabled in headless mode")
+		return
+	}
 	dir, err := a.jobDir(r.PathValue("kind"), r.PathValue("id"))
 	if err != nil {
 		writeErr(w, http.StatusNotFound, err.Error())
@@ -38,6 +43,10 @@ func (a *apiServer) handleReveal(w http.ResponseWriter, r *http.Request) {
 
 // POST /api/jobs/{kind}/{id}/open {path} — open a file with the OS default app.
 func (a *apiServer) handleOpenFile(w http.ResponseWriter, r *http.Request) {
+	if !a.app.GUI {
+		writeErr(w, http.StatusForbidden, "desktop actions disabled in headless mode")
+		return
+	}
 	var req struct {
 		Path string `json:"path"`
 	}
@@ -66,7 +75,9 @@ func (a *apiServer) handleOpenFile(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusForbidden, "bad path")
 		return
 	}
-	openInFileManager(abs)
+	// Never execute a downloaded file via the OS handler — only select it in
+	// the containing folder so untrusted payloads cannot run on the host.
+	revealInFileManager(abs)
 	writeJSONResp(w, map[string]any{"ok": true})
 }
 
@@ -78,7 +89,7 @@ func (a *apiServer) handleTorrentFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/x-bittorrent")
-	w.Header().Set("Content-Disposition", `attachment; filename="`+name+`"`)
+	w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": name}))
 	_, _ = w.Write(raw)
 }
 

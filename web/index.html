@@ -42,9 +42,9 @@
     </div>
     <table class="grid">
       <thead><tr>
-        <th class="col-name">Name</th><th class="col-size">Size</th><th class="col-prog">Progress</th>
-        <th class="col-speed">Down</th><th class="col-speed">Up</th><th class="col-peers">Peers</th>
-        <th class="col-eta">ETA</th><th class="col-act">Actions</th>
+        <th class="col-name" data-sort="name" data-tbl="t">Name</th><th class="col-size" data-sort="size" data-tbl="t">Size</th><th class="col-prog" data-sort="prog" data-tbl="t">Progress</th>
+        <th class="col-speed" data-sort="down" data-tbl="t">Down</th><th class="col-speed" data-sort="up" data-tbl="t">Up</th><th class="col-peers" data-sort="peers" data-tbl="t">Peers</th>
+        <th class="col-added" data-sort="added" data-tbl="t">Added</th><th class="col-eta" data-sort="eta" data-tbl="t">ETA</th><th class="col-act">Actions</th>
       </tr></thead>
       <tbody id="torrentRows"></tbody>
     </table>
@@ -57,8 +57,9 @@
     </div>
     <table class="grid">
       <thead><tr>
-        <th class="col-name">Name</th><th class="col-size">Size</th><th class="col-prog">Progress</th>
-        <th class="col-speed">Down</th><th class="col-segs">Segments</th><th class="col-eta">ETA</th>
+        <th class="col-name" data-sort="name" data-tbl="n">Name</th><th class="col-size" data-sort="size" data-tbl="n">Size</th><th class="col-prog" data-sort="prog" data-tbl="n">Progress</th>
+        <th class="col-speed" data-sort="down" data-tbl="n">Down</th><th class="col-segs" data-sort="segs" data-tbl="n">Segments</th>
+        <th class="col-added" data-sort="added" data-tbl="n">Added</th><th class="col-eta">ETA</th>
         <th class="col-act">Actions</th>
       </tr></thead>
       <tbody id="nzbRows"></tbody>
@@ -86,7 +87,10 @@
       <label class="chk"><input name="enableDHT" type="checkbox"> Enable DHT</label>
       <label class="chk"><input name="enableUpnp" type="checkbox"> Enable UPnP</label>
       <label class="chk"><input name="enablePex" type="checkbox"> Enable peer exchange</label>
+      <label>Seed until ratio <input name="seedRatio" type="number" min="0" max="100" step="0.1" placeholder="0 = forever"></label>
+      <label>Seed time limit (minutes) <input name="seedTime" type="number" min="0" step="1" placeholder="0 = unlimited"></label>
       <label>UI token (optional) <input name="uiToken" type="text" placeholder="leave empty for no auth"></label>
+      <label class="chk"><input name="clearToken" type="checkbox"> Clear UI token (disable auth)</label>
       <label>Watch folder (auto-add .torrent/.nzb) <input name="watchDir" type="text" placeholder="/path/to/watch"></label>
       <label class="chk"><input name="webUI" type="checkbox" checked> Web UI (uncheck for native window only — no browser interface)</label>
       <button type="submit" class="primary">Save</button>
@@ -106,6 +110,7 @@
     <div id="atab-link" class="atab active">
       <input id="addUri" type="text" placeholder="magnet:… or https://…torrent / .nzb">
       <label class="chk">NZB server <select id="addServer"></select></label>
+      <label class="chk">Category <input id="addCategory" type="text" placeholder="tv / movies / music"></label>
       <div class="row"><button id="btnAddGo" class="primary">Add</button><button id="btnAddCancel">Cancel</button></div>
     </div>
     <div id="atab-file" class="atab">
@@ -164,6 +169,7 @@
       <label>Username <input name="username"></label>
       <label>Password <input name="password" type="password"></label>
       <label>Connections <input name="connections" type="number" min="1" max="64" value="12"></label>
+      <label class="chk"><input name="backupOnly" type="checkbox"> Backup/fill account only (tried after primaries)</label>
       <div class="row"><button type="submit" class="primary">Save</button><button type="button" id="btnServerCancel">Cancel</button></div>
     </form>
   </div>

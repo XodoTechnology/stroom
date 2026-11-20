@@ -2,12 +2,15 @@ package main
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	urlpkg "net/url"
 	"path/filepath"
 	"strings"
 	"time"
@@ -32,17 +35,42 @@ func newAPIServer(app *App, addr string) *apiServer {
 }
 
 func (a *apiServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// Host validation blocks DNS-rebinding against the loopback API.
+	host := r.Host
+	if i := strings.LastIndex(host, ":"); i >= 0 && !strings.HasSuffix(host, "]") {
+		host = host[:i]
+	}
+	if !allowedHost(strings.Trim(host, "[]")) {
+		http.Error(w, "forbidden host", http.StatusForbidden)
+		return
+	}
+	// CSRF: browsers always send Origin on cross-site writes; non-browser
+	// clients send none, so only same-origin requests may mutate state.
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		if o := r.Header.Get("Origin"); o != "" {
+			if u, err := urlpkg.Parse(o); err != nil || u.Host != r.Host {
+				http.Error(w, "forbidden origin", http.StatusForbidden)
+				return
+			}
+		}
+	}
 	if tok := a.app.uiToken(); tok != "" {
-		ok := r.URL.Query().Get("token") == tok ||
-			r.Header.Get("Authorization") == "Bearer "+tok ||
-			cookieToken(r) == tok
+		eq := func(g string) bool {
+			return subtle.ConstantTimeCompare([]byte(g), []byte(tok)) == 1
+		}
+		ah := r.Header.Get("Authorization")
+		ok := eq(r.URL.Query().Get("token")) ||
+			eq(r.URL.Query().Get("apikey")) || // SABnzbd-compat param
+			eq(r.FormValue("apikey")) || eq(r.URL.Query().Get("apikey")) ||
+			(strings.HasPrefix(ah, "Bearer ") && eq(ah[7:])) ||
+			eq(cookieToken(r))
 		if !ok {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
 		// First visit carries ?token= — persist it as a cookie so static
 		// assets (css/js) and later API calls authenticate without the param.
-		if r.URL.Query().Get("token") == tok && cookieToken(r) != tok {
+		if r.URL.Query().Get("token") == tok && !strings.EqualFold(cookieToken(r), tok) {
 			http.SetCookie(w, &http.Cookie{
 				Name:     "stroom_token",
 				Value:    tok,
@@ -53,6 +81,18 @@ func (a *apiServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	a.mux.ServeHTTP(w, r)
+}
+
+// allowedHost permits loopback hosts (and a wildcard listen addr) so the API
+// cannot be reached via attacker-controlled DNS names.
+func allowedHost(host string) bool {
+	if host == "localhost" || host == "127.0.0.1" || host == "::1" {
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback()
+	}
+	return false
 }
 
 func cookieToken(r *http.Request) string {
@@ -91,6 +131,8 @@ func (a *apiServer) routes() {
 	m.HandleFunc("POST /api/update/apply", a.handleUpdateApply)
 	m.HandleFunc("GET /api/settings", a.handleSettingsGet)
 	m.HandleFunc("POST /api/settings", a.handleSettingsSet)
+	m.HandleFunc("/sabnzbd/api", a.handleSAB)
+	m.HandleFunc("/api/v2/{rest...}", a.handleQB)
 	m.HandleFunc("/", a.handleStatic)
 }
 
@@ -103,6 +145,7 @@ type publicServer struct {
 	Username    string `json:"username,omitempty"`
 	HasPass     bool   `json:"hasPass"`
 	Connections int    `json:"connections"`
+	BackupOnly  bool   `json:"backupOnly,omitempty"`
 }
 
 func publicServers(cfg []NNTPServer) []publicServer {
@@ -112,24 +155,28 @@ func publicServers(cfg []NNTPServer) []publicServer {
 			ID: s.ID, Name: s.Name, Host: s.Host, Port: s.Port,
 			TLS: s.TLS, Username: s.Username, HasPass: s.Password != "",
 			Connections: s.Connections,
+			BackupOnly:  s.BackupOnly,
 		})
 	}
 	return out
 }
 
 type publicConfig struct {
-	ListenAddr        string `json:"listenAddr"`
-	DownloadDir       string `json:"downloadDir"`
-	BTListenPort      int    `json:"btListenPort"`
-	EnableDHT         bool   `json:"enableDHT"`
-	EnableUPnP        bool   `json:"enableUpnp"`
-	EnablePEX         bool   `json:"enablePex"`
-	DownloadLimit     int64  `json:"downloadLimit"`
-	UploadLimit       int64  `json:"uploadLimit"`
-	NZBMaxConnections int    `json:"nzbMaxConnections"`
-	HasToken          bool   `json:"hasToken"`
-	DisableWebUI      bool   `json:"disableWebUI"`
-	WatchDir          string `json:"watchDir,omitempty"`
+	ListenAddr         string  `json:"listenAddr"`
+	DownloadDir        string  `json:"downloadDir"`
+	BTListenPort       int     `json:"btListenPort"`
+	EnableDHT          bool    `json:"enableDHT"`
+	EnableUPnP         bool    `json:"enableUpnp"`
+	EnablePEX          bool    `json:"enablePex"`
+	DownloadLimit      int64   `json:"downloadLimit"`
+	UploadLimit        int64   `json:"uploadLimit"`
+	NZBMaxConnections  int     `json:"nzbMaxConnections"`
+	NZBMissingAbortPct float64 `json:"nzbMissingAbortPct"`
+	SeedRatioLimit     float64 `json:"seedRatio"`
+	SeedTimeMin        int     `json:"seedTime"`
+	HasToken           bool    `json:"hasToken"`
+	DisableWebUI       bool    `json:"disableWebUI"`
+	WatchDir           string  `json:"watchDir,omitempty"`
 }
 
 func (a *apiServer) pubConfig() publicConfig {
@@ -139,10 +186,13 @@ func (a *apiServer) pubConfig() publicConfig {
 		BTListenPort: c.BTListenPort, EnableDHT: c.EnableDHT,
 		EnableUPnP: c.EnableUPnP, EnablePEX: c.EnablePEX,
 		DownloadLimit: c.DownloadLimit, UploadLimit: c.UploadLimit,
-		NZBMaxConnections: c.NZBMaxConnections,
-		HasToken:          c.UIToken != "",
-		DisableWebUI:      c.DisableWebUI,
-		WatchDir:          c.WatchDir,
+		NZBMaxConnections:  c.NZBMaxConnections,
+		NZBMissingAbortPct: c.NZBMissingAbortPct,
+		SeedRatioLimit:     c.SeedRatioLimit,
+		SeedTimeMin:        c.SeedTimeMin,
+		HasToken:           c.UIToken != "",
+		DisableWebUI:       c.DisableWebUI,
+		WatchDir:           c.WatchDir,
 	}
 }
 
@@ -214,6 +264,7 @@ type addRequest struct {
 	Name       string `json:"name"`
 	ServerID   string `json:"serverID"`
 	Type       string `json:"type"`
+	Category   string `json:"category"`
 }
 
 func (a *apiServer) handleAdd(w http.ResponseWriter, r *http.Request) {
@@ -222,7 +273,7 @@ func (a *apiServer) handleAdd(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req addRequest
-	if err := json.NewDecoder(io.LimitReader(r.Body, 64<<20)).Decode(&req); err != nil {
+	if err := json.NewDecoder(io.LimitReader(r.Body, 32<<20)).Decode(&req); err != nil {
 		writeErr(w, http.StatusBadRequest, "bad json: "+err.Error())
 		return
 	}
@@ -235,7 +286,7 @@ func (a *apiServer) handleAdd(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *apiServer) handleAddMultipart(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseMultipartForm(256 << 20); err != nil {
+	if err := r.ParseMultipartForm(32 << 20); err != nil {
 		writeErr(w, http.StatusBadRequest, "multipart: "+err.Error())
 		return
 	}
@@ -245,7 +296,7 @@ func (a *apiServer) handleAddMultipart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer f.Close()
-	data, err := io.ReadAll(io.LimitReader(f, 256<<20))
+	data, err := io.ReadAll(io.LimitReader(f, 64<<20))
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, "read: "+err.Error())
 		return
@@ -255,6 +306,7 @@ func (a *apiServer) handleAddMultipart(w http.ResponseWriter, r *http.Request) {
 	req := addRequest{
 		Name:     strings.TrimSuffix(name, filepath.Ext(name)),
 		ServerID: serverID,
+		Category: r.FormValue("category"),
 	}
 	lower := strings.ToLower(name)
 	sniff := sniffKind(data)
@@ -311,12 +363,12 @@ func (a *apiServer) dispatchAdd(req addRequest) (id, kind string, err error) {
 				return "", "", fmt.Errorf("bad nzb data: %w", err)
 			}
 		} else if req.URI != "" {
-			id, err = a.app.NZB.FetchAndAdd(ctx, req.URI, req.ServerID)
+			id, err = a.app.NZB.FetchAndAdd(ctx, req.URI, req.ServerID, req.Category)
 			return id, "nzb", err
 		} else {
 			return "", "", errors.New("nzb: nothing to add")
 		}
-		id, err = a.app.NZB.ParseAndAdd(data, req.Name, req.ServerID)
+		id, err = a.app.NZB.ParseAndAdd(data, req.Name, req.ServerID, req.Category)
 		return id, "nzb", err
 	}
 	if req.Type == "torrent" || req.TorrentB64 != "" {
@@ -325,18 +377,18 @@ func (a *apiServer) dispatchAdd(req addRequest) (id, kind string, err error) {
 			if derr != nil {
 				return "", "", fmt.Errorf("bad torrent data: %w", derr)
 			}
-			id, err := a.app.Torrent.AddTorrentBytes(data)
+			id, err := a.app.Torrent.AddTorrent(AddInput{TorrentB64: base64.StdEncoding.EncodeToString(data), Category: req.Category})
 			return id, "torrent", err
 		}
 	}
 	if req.URI != "" {
 		u := req.URI
 		if strings.HasPrefix(u, "magnet:") {
-			id, err := a.app.Torrent.AddMagnetURI(u)
+			id, err := a.app.Torrent.AddTorrent(AddInput{Magnet: u, Category: req.Category})
 			return id, "torrent", err
 		}
 		if strings.Contains(strings.ToLower(u), ".nzb") {
-			id, err = a.app.NZB.FetchAndAdd(ctx, u, req.ServerID)
+			id, err = a.app.NZB.FetchAndAdd(ctx, u, req.ServerID, req.Category)
 			return id, "nzb", err
 		}
 		return a.fetchAndRoute(ctx, u, req)
@@ -345,6 +397,9 @@ func (a *apiServer) dispatchAdd(req addRequest) (id, kind string, err error) {
 }
 
 func (a *apiServer) fetchAndRoute(ctx context.Context, url string, req addRequest) (string, string, error) {
+	if u, err := urlpkg.Parse(url); err != nil || (u.Scheme != "http" && u.Scheme != "https") {
+		return "", "", errors.New("only http(s) URLs are fetchable")
+	}
 	hreq, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return "", "", err
@@ -357,7 +412,7 @@ func (a *apiServer) fetchAndRoute(ctx context.Context, url string, req addReques
 	if resp.StatusCode != 200 {
 		return "", "", fmt.Errorf("fetch %s: %s", url, resp.Status)
 	}
-	data, err := io.ReadAll(io.LimitReader(resp.Body, 256<<20))
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 64<<20))
 	if err != nil {
 		return "", "", err
 	}
@@ -376,10 +431,10 @@ func (a *apiServer) fetchAndRoute(ctx context.Context, url string, req addReques
 	}
 	switch kind {
 	case "nzb":
-		id, err := a.app.NZB.ParseAndAdd(data, name, req.ServerID)
+		id, err := a.app.NZB.ParseAndAdd(data, name, req.ServerID, req.Category)
 		return id, "nzb", err
 	case "torrent":
-		id, err := a.app.Torrent.AddTorrentBytes(data)
+		id, err := a.app.Torrent.AddTorrent(AddInput{TorrentB64: base64.StdEncoding.EncodeToString(data), Category: req.Category})
 		return id, "torrent", err
 	default:
 		return "", "", errors.New("could not determine file type")

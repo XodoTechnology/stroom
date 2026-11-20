@@ -32,8 +32,12 @@ button.mini { padding: 2px 7px; font-size: 11px; margin-right: 3px; }
 .grid th { text-align: left; color: var(--dim); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: .5px; padding: 6px 8px; border-bottom: 1px solid var(--border); }
 .grid td { padding: 7px 8px; border-bottom: 1px solid #26262d; vertical-align: middle; }
 .grid tr:hover td { background: var(--panel2); }
-.col-name { width: 32%; } .col-size, .col-eta, .col-peers, .col-segs { width: 9%; }
+.col-name { width: 30%; } .col-size, .col-eta, .col-peers, .col-segs { width: 9%; }
+.col-added { width: 6%; }
 .col-speed { width: 10%; } .col-prog { width: 14%; } .col-act { width: 16%; text-align: right; white-space: nowrap; }
+th[data-sort] { cursor: pointer; user-select: none; }
+th[data-sort].sorted.asc::after { content: " ▲"; font-size: 9px; opacity: .8; }
+th[data-sort].sorted.desc::after { content: " ▼"; font-size: 9px; opacity: .8; }
 
 .namecell { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 340px; }
 .badge { display: inline-block; font-size: 10px; padding: 1px 5px; border-radius: 3px; margin-left: 6px; vertical-align: middle; }
@@ -125,3 +129,4 @@ tr:hover .expbtn { opacity: 1; }
 .det-sec { margin-top: 12px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .5px; color: var(--dim); }
 .det-list { margin: 6px 0 0; padding-left: 18px; font-size: 12px; color: var(--dim); max-height: 160px; overflow: auto; }
 .det-list li { word-break: break-all; }
+.tag{font-size:9px;background:var(--acc,#3a6);padding:1px 5px;border-radius:3px}

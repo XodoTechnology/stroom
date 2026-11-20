@@ -2,14 +2,16 @@
 "use strict";
 
 const state = { data: null, view: "torrents", servers: [], editingServer: null, updateDismissed: false,
-  speedHist: [], prevJobs: {}, expanded: {}, filesCache: {} };
+  speedHist: [], prevJobs: {}, expanded: {}, filesCache: {},
+  sortT: { key: "added", dir: 1 }, sortN: { key: "added", dir: 1 } };
 const $ = (s) => document.querySelector(s);
-// UI token passed as ?token= (EventSource can't set headers).
-const urlToken = new URLSearchParams(location.search).get("token") || "";
-function withToken(path) {
-  if (!urlToken) return path;
-  return path + (path.includes("?") ? "&" : "?") + "token=" + encodeURIComponent(urlToken);
+// UI token: the page-load ?token= is exchanged for an HttpOnly cookie by
+// the server, so strip it from the address bar immediately and rely on the
+// cookie for every later request (keeps the secret out of history).
+if (new URLSearchParams(location.search).get("token") && history.replaceState) {
+  history.replaceState(null, "", location.pathname + location.hash);
 }
+function withToken(path) { return path; }
 
 // ---------- utils ----------
 function esc(s) {
@@ -44,6 +46,57 @@ function postJSON(path, body) {
   return api(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) });
 }
 
+// ---------- sorting ----------
+const SORTVALS = {
+  t: {
+    name:  t => (t.name || "").toLowerCase(),
+    size:  t => t.size || 0,
+    prog:  t => t.size ? (t.done || 0) / t.size : (t.progress ?? 0),
+    down:  t => t.downSpeed || 0,
+    up:    t => t.upSpeed || 0,
+    peers: t => (t.peers || 0) + (t.seeds || 0),
+    eta:   t => (t.eta == null || t.eta < 0) ? Infinity : t.eta,
+    added: t => t.addedAt || "",
+  },
+  n: {
+    name:  j => (j.name || "").toLowerCase(),
+    size:  j => j.totalBytes || 0,
+    prog:  j => j.totalBytes ? (j.doneBytes || 0) / j.totalBytes : (j.progress ?? 0),
+    down:  j => j.downSpeed || 0,
+    segs:  j => j.segmentsTotal ? (j.segmentsDone || 0) / j.segmentsTotal : 0,
+    added: j => j.addedAt || "",
+  },
+};
+
+function sortJobs(list, tbl) {
+  const s = tbl === "t" ? state.sortT : state.sortN;
+  const f = SORTVALS[tbl][s.key];
+  if (!f) return list;
+  return list.slice().sort((a, b) => {
+    const va = f(a), vb = f(b);
+    const c = (typeof va === "number" && typeof vb === "number")
+      ? va - vb : String(va).localeCompare(String(vb));
+    return c * s.dir;
+  });
+}
+
+function updateSortHeaders() {
+  document.querySelectorAll("th[data-sort]").forEach(th => {
+    const s = th.dataset.tbl === "t" ? state.sortT : state.sortN;
+    th.classList.remove("sorted", "asc", "desc");
+    if (s.key === th.dataset.sort) th.classList.add("sorted", s.dir > 0 ? "asc" : "desc");
+  });
+}
+
+function fmtAgo(iso) {
+  if (!iso) return "—";
+  const s = Math.max(0, (Date.now() - Date.parse(iso)) / 1000);
+  if (s < 90) return Math.round(s) + "s";
+  if (s < 5400) return Math.round(s / 60) + "m";
+  if (s < 129600) return Math.round(s / 3600) + "h";
+  return Math.round(s / 86400) + "d";
+}
+
 // ---------- rendering ----------
 function render() {
   const d = state.data; if (!d) return;
@@ -60,6 +113,7 @@ function render() {
   restoreExpanded();
   $("#verTag").textContent = d.version ? "v" + d.version.replace(/^v+/, "") : "";
   if (!state.settingsLoaded) loadSettingsIntoForm(d.config);
+  updateSortHeaders();
 }
 
 function progBar(done, total, err) {
@@ -81,7 +135,7 @@ function jobActionBtns(kind, id, paused, status) {
 function renderTorrents(list) {
   const f = $("#filterT").value.toLowerCase();
   const rows = $("#torrentRows");
-  const filtered = list.filter(t => !f || (t.name || "").toLowerCase().includes(f) || (t.hash || "").includes(f));
+  const filtered = sortJobs(list.filter(t => !f || (t.name || "").toLowerCase().includes(f) || (t.hash || "").includes(f)), "t");
   $("#torrentsEmpty").style.display = filtered.length ? "none" : "block";
   rows.innerHTML = filtered.map(t => {
     const st = t.status || "";
@@ -98,7 +152,7 @@ function renderTorrents(list) {
       <td>${fmtBytes(t.size)}</td>
       <td>${progBar(t.done || 0, t.size, st === "error")}</td>
       <td class="dim">${dl}</td><td class="dim">${ul}</td>
-      <td>${t.peers ?? "—"}${t.seeds ? "/" + t.seeds : ""}</td><td>${fmtEta(t.eta)}</td>
+      <td>${t.peers ?? "—"}${t.seeds ? "/" + t.seeds : ""}</td><td class="dim">${fmtAgo(t.addedAt)}</td><td>${fmtEta(t.eta)}</td>
       ${jobActionBtns("torrent", t.id, paused, st)}
     </tr>`;
   }).join("");
@@ -107,7 +161,7 @@ function renderTorrents(list) {
 function renderNZB(list) {
   const f = $("#filterN").value.toLowerCase();
   const rows = $("#nzbRows");
-  const filtered = list.filter(j => !f || (j.name || "").toLowerCase().includes(f));
+  const filtered = sortJobs(list.filter(j => !f || (j.name || "").toLowerCase().includes(f)), "n");
   $("#nzbEmpty").style.display = filtered.length ? "none" : "block";
   rows.innerHTML = filtered.map(j => {
     const st = j.status || "";
@@ -124,6 +178,7 @@ function renderNZB(list) {
       <td>${progBar(j.doneBytes || 0, j.totalBytes, st === "error")}</td>
       <td class="dim">${fmtSpeed(j.downSpeed)}</td>
       <td>${segTxt}${failTxt}</td>
+      <td class="dim">${fmtAgo(j.addedAt)}</td>
       <td>—</td>
       ${jobActionBtns("nzb", j.id, paused, st)}
     </tr>`;
@@ -135,7 +190,7 @@ function renderServers(list) {
   $("#serversEmpty").style.display = list.length ? "none" : "block";
   $("#serverRows").innerHTML = list.map(s => `<tr>
     <td>${esc(s.name || s.host)}</td><td>${esc(s.host)}</td><td>${s.port}</td>
-    <td>${s.tls ? "TLS" : "—"}</td><td>${esc(s.username || "—")}</td><td>${s.connections}</td>
+    <td>${s.tls ? "TLS" : "—"}</td><td>${esc(s.username || "—")}</td><td>${s.connections}${s.backupOnly ? ' <span class="tag">fill</span>' : ""}</td>
     <td><button class="mini" data-srvtest="${esc(s.id)}">test</button>
         <button class="mini" data-srvedit="${esc(s.id)}">edit</button>
         <button class="mini danger" data-srvdel="${esc(s.id)}">✕</button></td>
@@ -176,6 +231,9 @@ function loadSettingsIntoForm(c) {
   f.enableDHT.checked = !!c.enableDHT;
   f.enableUpnp.checked = !!c.enableUpnp;
   f.enablePex.checked = !!c.enablePex;
+  f.seedRatio.value = c.seedRatio || "";
+  f.seedTime.value = c.seedTime || "";
+  f.clearToken.checked = false;
   f.uiToken.value = "";
   f.uiToken.placeholder = c.hasToken ? "•••• (set)" : "leave empty for no auth";
   f.webUI.checked = !c.disableWebUI;
@@ -271,6 +329,13 @@ function wireEvents() {
   $("#filterT").addEventListener("input", render);
   $("#filterN").addEventListener("input", render);
 
+  document.querySelectorAll("th[data-sort]").forEach(th => th.addEventListener("click", () => {
+    const s = th.dataset.tbl === "t" ? state.sortT : state.sortN;
+    if (s.key === th.dataset.sort) s.dir = -s.dir;
+    else { s.key = th.dataset.sort; s.dir = th.dataset.sort === "name" ? 1 : -1; }
+    render();
+  }));
+
   document.querySelectorAll("#sidebar a").forEach(a => a.addEventListener("click", (e) => {
     e.preventDefault();
     document.querySelectorAll("#sidebar a").forEach(x => x.classList.remove("active"));
@@ -303,6 +368,7 @@ function wireEvents() {
     try {
       const body = { uri };
       const sid = $("#addServer").value; if (sid) body.serverID = sid;
+      const cat = $("#addCategory").value.trim(); if (cat) body.category = cat;
       const r = await postJSON("/api/add", body);
       toast(`added ${r.kind} job`);
       $("#addUri").value = ""; $("#addModal").classList.add("hidden");
@@ -312,6 +378,7 @@ function wireEvents() {
     const f = $("#addFile").files[0]; if (!f) return;
     const fd = new FormData(); fd.append("file", f);
     const sid = $("#addServer").value; if (sid) fd.append("serverID", sid);
+    const cat = $("#addCategory").value.trim(); if (cat) fd.append("category", cat);
     try {
       const r = await api("/api/add", { method: "POST", body: fd });
       toast(`added ${r.kind} job`);
@@ -332,6 +399,7 @@ function wireEvents() {
       username: fd.get("username") || "",
       password: fd.get("password") || "",
       connections: parseInt(fd.get("connections") || "12", 10),
+      backupOnly: fd.get("backupOnly") === "on",
     };
     if (state.editingServer) srv.id = state.editingServer;
     const servers = (state.data?.servers || []).filter(s => s.id !== state.editingServer);
@@ -398,8 +466,11 @@ function wireEvents() {
       enableUpnp: fd.get("enableUpnp") === "on",
       enablePex: fd.get("enablePex") === "on",
     };
+    body.seedRatio = parseFloat(fd.get("seedRatio") || "0") || 0;
+    body.seedTime = parseInt(fd.get("seedTime") || "0", 10) || 0;
     const tok = fd.get("uiToken");
-    if (tok) body.uiToken = tok; // empty = keep existing token
+    if (fd.get("clearToken") === "on") body.uiToken = ""; // explicit clear disables auth
+    else if (tok) body.uiToken = tok; // empty field = keep existing token
     body.disableWebUI = fd.get("webUI") !== "on";
     body.watchDir = fd.get("watchDir") || "";
     try {
@@ -419,6 +490,7 @@ function openServerModal(id) {
       f.name.value = s.name || ""; f.host.value = s.host || "";
       f.port.value = s.port || ""; f.tls.checked = !!s.tls;
       f.username.value = s.username || ""; f.connections.value = s.connections || 12;
+      f.backupOnly.checked = !!s.backupOnly;
       f.password.placeholder = s.hasPass ? "•••• (unchanged)" : "";
     }
   }

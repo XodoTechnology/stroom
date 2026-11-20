@@ -74,6 +74,9 @@ func (a *App) Close() {
 	if a.Torrent != nil {
 		a.Torrent.Close()
 	}
+	if a.NZB != nil {
+		a.NZB.Close()
+	}
 }
 
 func openBrowser(url string) {
@@ -127,7 +130,11 @@ func runAdd(args []string) error {
 	if addr == "" {
 		addr = defaultAPIAddr(dataFlag)
 	}
-	return addViaAPI(addr, target, serverID, typ)
+	tok := ""
+	if cfg, err := loadConfig(resolveDataDir(dataFlag)); err == nil {
+		tok = cfg.UIToken
+	}
+	return addViaAPI(addr, target, serverID, typ, tok)
 }
 
 // addViaAPI sends an add request to a running instance.
@@ -146,7 +153,7 @@ func defaultAPIAddr(dataDir string) string {
 	return "127.0.0.1:8080"
 }
 
-func addViaAPI(addr, target, serverID, typ string) error {
+func addViaAPI(addr, target, serverID, typ, token string) error {
 	if addr == "" {
 		addr = "127.0.0.1:8080"
 	}
@@ -189,8 +196,16 @@ func addViaAPI(addr, target, serverID, typ string) error {
 		ctype = "application/json"
 	}
 
+	hreq, err := http.NewRequest("POST", url, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	hreq.Header.Set("Content-Type", ctype)
+	if token != "" {
+		hreq.Header.Set("Authorization", "Bearer "+token)
+	}
 	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Post(url, ctype, bytes.NewReader(body))
+	resp, err := client.Do(hreq)
 	if err != nil {
 		return fmt.Errorf("cannot reach %s — is stroom running? (%v)", url, err)
 	}

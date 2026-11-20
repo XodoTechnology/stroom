@@ -120,10 +120,7 @@ func (c *nntpClient) command(format string, args ...any) (code int, text string,
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.conn.SetDeadline(time.Now().Add(60 * time.Second))
-	if _, err = fmt.Fprintf(c.w, format+"\r\n", args...); err != nil {
-		return 0, "", err
-	}
-	if err = c.w.Flush(); err != nil {
+	if err = c.writeCmd(format, args...); err != nil {
 		return 0, "", err
 	}
 	line, err := c.readLine()
@@ -160,6 +157,23 @@ func (c *nntpClient) readStatus() (int, string, error) {
 	}
 	code, err := parseStatus(line)
 	return code, line, err
+}
+
+// writeCmd formats one NNTP command line with all control characters
+// stripped — a malicious message-id or credential can otherwise inject
+// arbitrary commands into the session.
+func (c *nntpClient) writeCmd(format string, args ...any) error {
+	line := fmt.Sprintf(format, args...)
+	line = strings.Map(func(r rune) rune {
+		if r < 0x20 {
+			return ' '
+		}
+		return r
+	}, line)
+	if _, err := fmt.Fprintf(c.w, "%s\r\n", line); err != nil {
+		return err
+	}
+	return c.w.Flush()
 }
 
 var errNoSuchArticle = errors.New("no such article")
@@ -211,10 +225,7 @@ func (c *nntpClient) commandMulti(format string, args ...any) (int, []byte, erro
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.conn.SetDeadline(time.Now().Add(120 * time.Second))
-	if _, err := fmt.Fprintf(c.w, format+"\r\n", args...); err != nil {
-		return 0, nil, err
-	}
-	if err := c.w.Flush(); err != nil {
+	if err := c.writeCmd(format, args...); err != nil {
 		return 0, nil, err
 	}
 	line, err := c.readLine()

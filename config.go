@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"golang.org/x/time/rate"
 	"net"
 	"os"
 	"path/filepath"
@@ -23,6 +24,9 @@ type NNTPServer struct {
 	Password string `json:"password,omitempty"`
 	// Max simultaneous connections to this server.
 	Connections int `json:"connections"`
+	// BackupOnly (block/fill account): only tried for missing articles after
+	// all primary servers, never picked as default server.
+	BackupOnly bool `json:"backupOnly,omitempty"`
 }
 
 func (s NNTPServer) Addr() string {
@@ -55,6 +59,10 @@ type Config struct {
 	// minimum sample applies so early flukes don't kill recoverable posts.
 	// 0 disables.
 	NZBMissingAbortPct float64 `json:"nzbMissingAbortPct"`
+	// SeedRatioLimit pauses seeding torrents at this share ratio (0 = seed forever).
+	SeedRatioLimit float64 `json:"seedRatio,omitempty"`
+	// SeedTimeMin pauses seeding after this many minutes (0 = no limit).
+	SeedTimeMin int `json:"seedTime,omitempty"`
 	// News servers for NZB downloads.
 	NNTPServers []NNTPServer `json:"nntpServers"`
 	// Watch folder: auto-add .torrent/.nzb files dropped here.
@@ -106,9 +114,26 @@ type App struct {
 	NZB     *NZBEngine
 	GUI     bool
 	version string
-	cfgMu   sync.RWMutex // guards Config fields read on hot paths
-	updMu   sync.Mutex   // guards upd
-	upd     *updateInfo  // cached update check result
+	cfgMu   sync.RWMutex  // guards Config fields read on hot paths
+	dlLim   *rate.Limiter // shared by BitTorrent + NNTP download paths
+	updMu   sync.Mutex    // guards upd
+	upd     *updateInfo   // cached update check result
+}
+
+// downloadLimiter returns the shared download token bucket (rate.Inf until
+// SetDownloadLimit applies a real cap). NZB + torrent engines share it so a
+// single DownloadLimit governs combined bandwidth.
+func (a *App) downloadLimiter() *rate.Limiter {
+	a.cfgMu.Lock()
+	defer a.cfgMu.Unlock()
+	if a.dlLim == nil {
+		l := rate.Inf
+		if a.Config.DownloadLimit > 0 {
+			l = rate.Limit(a.Config.DownloadLimit)
+		}
+		a.dlLim = rate.NewLimiter(l, 4<<20)
+	}
+	return a.dlLim
 }
 
 // uiToken returns the configured UI token (lock-safe).

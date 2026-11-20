@@ -267,6 +267,11 @@ func (e *NZBEngine) fetchDecode(ctx context.Context, pool *nntpPool, msgID strin
 	if derr != nil {
 		return nil, derr
 	}
+	// Shared download limit: article payload bytes count against the same
+	// bucket as BitTorrent traffic.
+	if lim := e.app.downloadLimiter(); lim != nil {
+		_ = lim.WaitN(ctx, max(len(res.Data), 1))
+	}
 	return res.Data, nil
 }
 
@@ -277,7 +282,21 @@ func (e *NZBEngine) fetchDecode(ctx context.Context, pool *nntpPool, msgID strin
 func (e *NZBEngine) fetchFallback(ctx context.Context, primaryID, msgID string) ([]byte, error) {
 	var lastErr error
 	sawMissing := false
-	for _, srv := range e.app.servers() {
+	servers := e.app.servers()
+	// Two passes: primaries first, BackupOnly (block/fill) accounts last so
+	// metered bandwidth is only spent when no primary has the article.
+	ordered := make([]NNTPServer, 0, len(servers))
+	for _, s := range servers {
+		if !s.BackupOnly {
+			ordered = append(ordered, s)
+		}
+	}
+	for _, s := range servers {
+		if s.BackupOnly {
+			ordered = append(ordered, s)
+		}
+	}
+	for _, srv := range ordered {
 		if srv.ID == primaryID {
 			continue
 		}
@@ -484,6 +503,9 @@ func (e *NZBEngine) finalizeJob(j *NZBJob, rt *nzbRuntime) {
 	case !incomplete:
 		j.Status = "done"
 		j.FinishedAt = time.Now()
+		if msg := unpackIfNeeded(j.Dir); msg != "" {
+			j.Error = msg
+		}
 	case incomplete && par2ControlFile(j.Dir) != "" && par2Available():
 		verify = true // repair missing segments from recovery blocks
 		j.Status = "verifying"
@@ -534,6 +556,12 @@ func (e *NZBEngine) repairWithPar(j *NZBJob) {
 		j.Status = "done"
 		j.FinishedAt = time.Now()
 		j.Error = ""
+		j.mu.Unlock()
+		if msg := unpackIfNeeded(j.Dir); msg != "" {
+			j.mu.Lock()
+			j.Error = msg
+		}
+		j.mu.Lock()
 	} else {
 		j.Status = "error"
 		j.Error = errStr

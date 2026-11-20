@@ -38,6 +38,7 @@ type torrentStateEntry struct {
 	CustomName string         `json:"customname,omitempty"`
 	MaxConns   int            `json:"maxconns,omitempty"`
 	Dir        string         `json:"dir"`
+	Category   string         `json:"category,omitempty"`
 	FilePrio   map[string]int `json:"fileprio,omitempty"`
 	AddedAt    time.Time      `json:"addedAt"`
 }
@@ -56,6 +57,7 @@ type TorrentEngine struct {
 	states    map[string]*torrentStateEntry // by infohash hex
 	order     []string                      // infohash hexes in add order
 	dirs      map[string]string             // infohash hex -> absolute torrent dir
+	cats      map[string]string             // infohash hex -> category
 	rates     map[string]*rateSample
 	lastRates map[string]lastRate
 	ids       idGen
@@ -65,6 +67,9 @@ type TorrentEngine struct {
 	ulLimiter *rate.Limiter
 	dlLim     int64
 	ulLim     int64
+	seedSince map[string]time.Time // first-observed-seeding time per ih
+	limited   map[string]bool      // already auto-paused by seed limits
+	stopLim   chan struct{}
 }
 
 type lastRate struct{ down, up int64 }
@@ -74,8 +79,12 @@ func NewTorrentEngine(app *App) (*TorrentEngine, error) {
 		app:       app,
 		states:    make(map[string]*torrentStateEntry),
 		dirs:      make(map[string]string),
+		cats:      make(map[string]string),
 		rates:     make(map[string]*rateSample),
 		lastRates: make(map[string]lastRate),
+		seedSince: make(map[string]time.Time),
+		limited:   make(map[string]bool),
+		stopLim:   make(chan struct{}),
 	}
 
 	base := filepath.Join(app.Config.DownloadDir, "torrents")
@@ -112,9 +121,18 @@ func NewTorrentEngine(app *App) (*TorrentEngine, error) {
 			claimed[dirName] = ih.HexString()
 			claimMu.Unlock()
 			e.mu.Lock()
-			e.dirs[ih.HexString()] = filepath.Join(baseDir, dirName)
+			root := baseDir
+			if cat := e.cats[ih.HexString()]; cat != "" {
+				root = filepath.Join(e.app.Config.DownloadDir, sanitizeName(cat))
+			}
+			tdir := filepath.Join(root, dirName)
+			e.dirs[ih.HexString()] = tdir
+			if st := e.states[ih.HexString()]; st != nil && st.Dir != tdir {
+				st.Dir = tdir
+				e.persistSoon()
+			}
 			e.mu.Unlock()
-			return filepath.Join(baseDir, dirName)
+			return tdir
 		},
 	})
 
@@ -156,7 +174,8 @@ func NewTorrentEngine(app *App) (*TorrentEngine, error) {
 	if app.Config.UploadLimit > 0 {
 		ulLim = rate.Limit(app.Config.UploadLimit)
 	}
-	cfg.DownloadRateLimiter = rate.NewLimiter(dlLim, 4<<20)
+	_ = dlLim
+	cfg.DownloadRateLimiter = app.downloadLimiter()
 	cfg.UploadRateLimiter = rate.NewLimiter(ulLim, 4<<20)
 	e.dlLimiter = cfg.DownloadRateLimiter
 	e.ulLimiter = cfg.UploadRateLimiter
@@ -168,10 +187,12 @@ func NewTorrentEngine(app *App) (*TorrentEngine, error) {
 		return nil, fmt.Errorf("torrent client: %w", err)
 	}
 	e.client = cl
+	go e.seedLimitLoop()
 	return e, nil
 }
 
 func (e *TorrentEngine) Close() {
+	close(e.stopLim)
 	e.Save()
 	if e.client != nil {
 		e.client.Close()
@@ -350,6 +371,7 @@ type AddInput struct {
 	Magnet     string
 	TorrentB64 string // base64 .torrent bytes
 	Name       string
+	Category   string
 }
 
 // AddTorrent adds a magnet or .torrent. Returns the job infohash hex.
@@ -393,7 +415,13 @@ func (e *TorrentEngine) AddTorrent(in AddInput) (string, error) {
 		Name:     in.Name,
 		AddedAt:  time.Now(),
 		FilePrio: map[string]int{},
+		Category: sanitizeName(in.Category),
 	}
+	e.mu.Lock()
+	if st.Category != "" {
+		e.cats[ih] = st.Category
+	}
+	e.mu.Unlock()
 	if in.TorrentB64 != "" {
 		st.TorrentB64 = in.TorrentB64
 		if mi != nil {
@@ -444,7 +472,7 @@ func (e *TorrentEngine) AddTorrentURL(ctx context.Context, url string) (string, 
 		return "", err
 	}
 	req.Header.Set("User-Agent", "Stroom/"+e.app.version)
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return "", err
 	}
@@ -515,6 +543,9 @@ func (e *TorrentEngine) Resume(ih string) error {
 	if st != nil {
 		st.Paused = false
 	}
+	e.mu.Lock()
+	delete(e.limited, ih)
+	e.mu.Unlock()
 	t.AllowDataDownload()
 	t.AllowDataUpload()
 	e.persistSoon()
@@ -602,6 +633,57 @@ func (e *TorrentEngine) SetRateLimits(down, up int64) {
 			e.ulLimiter.SetLimit(rate.Inf)
 		} else {
 			e.ulLimiter.SetLimit(rate.Limit(up))
+		}
+	}
+}
+
+// seedLimitLoop enforces global SeedRatioLimit / SeedTimeMin: completed
+// torrents are auto-paused once the configured share target is reached.
+// A torrent paused this way stays paused until the user resumes it.
+func (e *TorrentEngine) seedLimitLoop() {
+	tick := time.NewTicker(30 * time.Second)
+	defer tick.Stop()
+	for {
+		select {
+		case <-e.stopLim:
+			return
+		case <-tick.C:
+		}
+		e.checkSeedLimits()
+	}
+}
+
+func (e *TorrentEngine) checkSeedLimits() {
+	cfg := e.app.configSnapshot()
+	if cfg.SeedRatioLimit <= 0 && cfg.SeedTimeMin <= 0 {
+		return
+	}
+	for _, t := range e.client.Torrents() {
+		if !t.Seeding() {
+			continue
+		}
+		ih := t.InfoHash().HexString()
+		e.mu.Lock()
+		if e.limited[ih] {
+			e.mu.Unlock()
+			continue
+		}
+		if _, ok := e.seedSince[ih]; !ok {
+			e.seedSince[ih] = time.Now()
+		}
+		since := e.seedSince[ih]
+		e.mu.Unlock()
+
+		cs := t.Stats()
+		size := t.Length()
+		hitRatio := cfg.SeedRatioLimit > 0 && size > 0 &&
+			float64(cs.BytesWrittenData.Int64())/float64(size) >= cfg.SeedRatioLimit
+		hitTime := cfg.SeedTimeMin > 0 && time.Since(since) >= time.Duration(cfg.SeedTimeMin)*time.Minute
+		if hitRatio || hitTime {
+			e.mu.Lock()
+			e.limited[ih] = true
+			e.mu.Unlock()
+			_ = e.Pause(ih)
 		}
 	}
 }

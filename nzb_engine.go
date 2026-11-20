@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -12,7 +13,35 @@ import (
 	"time"
 )
 
-var httpClient = &http.Client{Timeout: 60 * time.Second}
+// httpClient fetches remote .torrent/.nzb URLs through an SSRF-guarded
+// dialer: loopback, link-local and unspecified destinations are refused
+// (STROOM_ALLOW_LOCAL_FETCH=1 opts back in for LAN indexers).
+var httpClient = &http.Client{
+	Timeout:   60 * time.Second,
+	Transport: &http.Transport{DialContext: safeDialContext},
+}
+
+func safeDialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	if os.Getenv("STROOM_ALLOW_LOCAL_FETCH") == "" {
+		host, port, err := net.SplitHostPort(addr)
+		if err != nil {
+			return nil, err
+		}
+		ips, err := net.DefaultResolver.LookupIP(ctx, "ip", host)
+		if err != nil {
+			return nil, err
+		}
+		for _, ip := range ips {
+			if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() {
+				return nil, fmt.Errorf("refusing local fetch target %s", ip)
+			}
+		}
+		addr = net.JoinHostPort(ips[0].String(), port)
+	}
+	var d net.Dialer
+	d.Timeout = 20 * time.Second
+	return d.DialContext(ctx, network, addr)
+}
 
 func httpNewRequest(ctx context.Context, url string) (*http.Request, error) {
 	return http.NewRequestWithContext(ctx, "GET", url, nil)
@@ -50,6 +79,7 @@ type NZBJob struct {
 	Name           string          `json:"name"`
 	ServerID       string          `json:"serverID"`
 	ServerName     string          `json:"serverName,omitempty"`
+	Category       string          `json:"category,omitempty"`
 	Dir            string          `json:"dir"`    // absolute output dir
 	Status         string          `json:"status"` // queued|downloading|paused|done|error
 	Error          string          `json:"error,omitempty"`
@@ -212,7 +242,10 @@ func (e *NZBEngine) Load() error {
 		// auto-resume incomplete jobs.
 		go func(job *NZBJob) {
 			e.rebuildDoneFromDisk(job)
-			if job.Status == "downloading" || job.Status == "queued" {
+			job.mu.Lock()
+			resume := job.Status == "downloading" || job.Status == "queued"
+			job.mu.Unlock()
+			if resume {
 				e.resumeJob(job)
 			}
 		}(j)
@@ -223,7 +256,7 @@ func (e *NZBEngine) Load() error {
 // ---------- adding ----------
 
 // AddNZB registers a parsed NZB for download. serverID may be "" → first server.
-func (e *NZBEngine) AddNZB(doc *NZBDoc, nzbName, serverID string) (string, error) {
+func (e *NZBEngine) AddNZB(doc *NZBDoc, nzbName, serverID string, category ...string) (string, error) {
 	if len(doc.Files) == 0 {
 		return "", fmt.Errorf("nzb has no files")
 	}
@@ -243,14 +276,22 @@ func (e *NZBEngine) AddNZB(doc *NZBDoc, nzbName, serverID string) (string, error
 	if dirName == "" || dirName == "nzb" {
 		dirName = fmt.Sprintf("nzb-%s", id[len(id)-6:])
 	}
-	dir := filepath.Join(e.nzbDir, dirName+"-"+shortHash(id))
+	base := e.nzbDir
+	cat := ""
+	if len(category) > 0 {
+		cat = sanitizeName(category[0])
+	}
+	if cat != "" {
+		base = filepath.Join(e.app.Config.DownloadDir, cat)
+	}
+	dir := filepath.Join(base, dirName+"-"+shortHash(id))
 	if err := ensureDir(dir); err != nil {
 		return "", err
 	}
 
 	j := &NZBJob{
 		ID: id, Kind: "nzb", Name: nzbName, ServerID: serverID,
-		Dir: dir, Status: "queued",
+		Dir: dir, Status: "queued", Category: cat,
 		AddedAt:   time.Now(),
 		doneSet:   map[string]map[int]bool{},
 		failedSet: map[string]map[int]bool{},
@@ -280,7 +321,7 @@ func (e *NZBEngine) AddNZB(doc *NZBDoc, nzbName, serverID string) (string, error
 }
 
 // ParseAndAdd handles raw .nzb bytes (already gunzipped-or-not) + optional name.
-func (e *NZBEngine) ParseAndAdd(data []byte, nzbName, serverID string) (string, error) {
+func (e *NZBEngine) ParseAndAdd(data []byte, nzbName, serverID string, category ...string) (string, error) {
 	doc, err := ParseNZB(data)
 	if err != nil {
 		return "", err
@@ -288,11 +329,11 @@ func (e *NZBEngine) ParseAndAdd(data []byte, nzbName, serverID string) (string, 
 	if nzbName == "" {
 		nzbName = doc.Name
 	}
-	return e.AddNZB(doc, nzbName, serverID)
+	return e.AddNZB(doc, nzbName, serverID, category...)
 }
 
 // FetchAndAdd downloads an .nzb over HTTP(S) then adds it.
-func (e *NZBEngine) FetchAndAdd(ctx context.Context, url, serverID string) (string, error) {
+func (e *NZBEngine) FetchAndAdd(ctx context.Context, url, serverID string, category ...string) (string, error) {
 	req, err := httpNewRequest(ctx, url)
 	if err != nil {
 		return "", err
@@ -316,7 +357,7 @@ func (e *NZBEngine) FetchAndAdd(ctx context.Context, url, serverID string) (stri
 	if name == "" {
 		name = strings.TrimSuffix(filepath.Base(url), ".nzb")
 	}
-	return e.ParseAndAdd(data, name, serverID)
+	return e.ParseAndAdd(data, name, serverID, category...)
 }
 
 // ---------- control ----------
@@ -336,7 +377,9 @@ func (e *NZBEngine) Pause(id string) error {
 	if rt := e.runtimes[id]; rt != nil {
 		rt.cancel()
 	}
+	j.mu.Lock()
 	j.Status = "paused"
+	j.mu.Unlock()
 	e.mu.Unlock()
 	e.persistSoon()
 	return nil
@@ -347,11 +390,14 @@ func (e *NZBEngine) Resume(id string) error {
 	if j == nil {
 		return errNotFound
 	}
+	j.mu.Lock()
 	if j.Status == "done" {
+		j.mu.Unlock()
 		return nil
 	}
 	j.Status = "queued"
 	j.Error = ""
+	j.mu.Unlock()
 	e.persistSoon()
 	go e.resumeJob(j)
 	return nil
@@ -408,6 +454,7 @@ func (e *NZBEngine) snapshotLocked(j *NZBJob) *NZBJob {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	cp := *j
+	cp.mu = nil // never copy the mutex pointer into API snapshots
 	cp.Files = make([]*NZBFileState, len(j.Files))
 	for i, f := range j.Files {
 		fc := *f
@@ -426,6 +473,9 @@ func (e *NZBEngine) snapshotLocked(j *NZBJob) *NZBJob {
 	}
 	cp.TotalBytes = total
 	cp.DoneBytes = done
+	if cp.ServerName == "" {
+		cp.ServerName = e.ServerName(j.ServerID)
+	}
 	cp.SegmentsTotal = segs
 	cp.SegmentsDone = segDone
 	cp.SegmentsFailed = segFail
@@ -463,7 +513,10 @@ func (e *NZBEngine) ActiveCount() int {
 	defer e.mu.Unlock()
 	n := 0
 	for _, j := range e.jobs {
-		if j.Status == "downloading" || j.Status == "queued" {
+		j.mu.Lock()
+		st := j.Status
+		j.mu.Unlock()
+		if st == "downloading" || st == "queued" {
 			n++
 		}
 	}
@@ -524,11 +577,16 @@ func (e *NZBEngine) serverByID(id string) *NNTPServer {
 }
 
 func (e *NZBEngine) defaultServer() *NNTPServer {
-	srvs := e.app.servers()
-	if len(srvs) == 0 {
+	servers := e.app.servers()
+	if len(servers) == 0 {
 		return nil
 	}
-	return &srvs[0]
+	for i := range servers {
+		if !servers[i].BackupOnly {
+			return &servers[i]
+		}
+	}
+	return &servers[0]
 }
 
 func (e *NZBEngine) poolFor(srv *NNTPServer) *nntpPool {

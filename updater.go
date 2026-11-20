@@ -112,7 +112,7 @@ func checkForUpdate(ctx context.Context, repo, current string) (*updateInfo, err
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("User-Agent", "Stroom/"+current)
-	resp, err := httpClient.Do(req)
+	resp, err := updateHTTPClient.Do(req)
 	if err != nil {
 		info.Error = err.Error()
 		return info, err
@@ -225,7 +225,7 @@ func downloadTo(ctx context.Context, url string, w io.Writer) error {
 		return err
 	}
 	req.Header.Set("User-Agent", "Stroom-updater/"+version)
-	resp, err := httpClient.Do(req)
+	resp, err := updateHTTPClient.Do(req)
 	if err != nil {
 		return err
 	}
@@ -236,6 +236,11 @@ func downloadTo(ctx context.Context, url string, w io.Writer) error {
 	_, err = io.Copy(w, io.LimitReader(resp.Body, 256<<20))
 	return err
 }
+
+// updateHTTPClient talks only to the release host (api.github.com /
+// objects.githubusercontent.com) — it bypasses the SSRF dialer guard used
+// for user-supplied .torrent/.nzb URLs.
+var updateHTTPClient = &http.Client{Timeout: 60 * time.Second}
 
 // fetchSHA256 downloads a .sha256 asset and returns the hex digest.
 func fetchSHA256(ctx context.Context, url string) (string, error) {
@@ -255,11 +260,23 @@ func fetchSHA256(ctx context.Context, url string) (string, error) {
 func applyUpdateWindows(newExe, tag string) (string, error) {
 	dir := filepath.Dir(selfPath())
 	final := filepath.Join(dir, "stroom.exe")
-	stage := filepath.Join(os.TempDir(), "stroom-update.exe")
+	// Stage beside the binary (same volume, unpredictable names) rather than
+	// fixed paths in the shared temp dir.
+	fst, err := os.CreateTemp(dir, "stroom-update-*.exe")
+	if err != nil {
+		return "", err
+	}
+	stage := fst.Name()
+	fst.Close()
 	if err := copyFile(newExe, stage); err != nil {
 		return "", err
 	}
-	bat := filepath.Join(os.TempDir(), "stroom-update.bat")
+	fbat, err := os.CreateTemp(dir, "stroom-update-*.bat")
+	if err != nil {
+		return "", err
+	}
+	bat := fbat.Name()
+	fbat.Close()
 	script := fmt.Sprintf(`@echo off
 ping -n 3 127.0.0.1 >nul
 move /y "%s" "%s" >nul

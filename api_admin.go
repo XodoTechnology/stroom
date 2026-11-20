@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"golang.org/x/time/rate"
 	"io"
 	"net/http"
 	"os"
@@ -280,6 +281,8 @@ func (a *apiServer) handleSettingsSet(w http.ResponseWriter, r *http.Request) {
 		UploadLimit        *int64   `json:"uploadLimit"`
 		NZBMaxConnections  *int     `json:"nzbMaxConnections"`
 		NZBMissingAbortPct *float64 `json:"nzbMissingAbortPct"`
+		SeedRatioLimit     *float64 `json:"seedRatio"`
+		SeedTimeMin        *int     `json:"seedTime"`
 		UIToken            *string  `json:"uiToken"`
 		DisableWebUI       *bool    `json:"disableWebUI"`
 		WatchDir           *string  `json:"watchDir"`
@@ -322,6 +325,12 @@ func (a *apiServer) handleSettingsSet(w http.ResponseWriter, r *http.Request) {
 	if req.NZBMissingAbortPct != nil {
 		cfg.NZBMissingAbortPct = *req.NZBMissingAbortPct
 	}
+	if req.SeedRatioLimit != nil {
+		cfg.SeedRatioLimit = *req.SeedRatioLimit
+	}
+	if req.SeedTimeMin != nil {
+		cfg.SeedTimeMin = *req.SeedTimeMin
+	}
 	if req.UIToken != nil {
 		cfg.UIToken = *req.UIToken
 	}
@@ -340,6 +349,11 @@ func (a *apiServer) handleSettingsSet(w http.ResponseWriter, r *http.Request) {
 			cfg.UploadLimit = *req.UploadLimit
 		}
 		a.app.Torrent.SetRateLimits(cfg.DownloadLimit, cfg.UploadLimit)
+		// Shared bucket: NZB engine rides the same limiter.
+		a.app.downloadLimiter().SetLimit(rate.Inf)
+		if cfg.DownloadLimit > 0 {
+			a.app.downloadLimiter().SetLimit(rate.Limit(cfg.DownloadLimit))
+		}
 	}
 	if err := a.app.saveConfig(); err != nil {
 		writeErr(w, 500, err.Error())

@@ -27,6 +27,9 @@ type TorrentJob struct {
 	Dir         string    `json:"dir"`
 	AddedAt     time.Time `json:"addedAt"`
 	Error       string    `json:"error,omitempty"`
+	Uploaded    int64     `json:"uploaded"`
+	Ratio       float64   `json:"ratio"`
+	Category    string    `json:"category,omitempty"`
 	NumFiles    int       `json:"numFiles"`
 	PieceStates string    `json:"pieceStates,omitempty"` // compact run string
 }
@@ -91,6 +94,11 @@ func (e *TorrentEngine) jobFor(t *torrent.Torrent) TorrentJob {
 	stats := t.Stats()
 	cs := stats.AllConnStats.ConnStats
 	down, up := e.ratesFor(ih, cs.BytesReadData.Int64(), cs.BytesWrittenData.Int64())
+	uploaded := cs.BytesWrittenData.Int64()
+	ratio := 0.0
+	if size > 0 {
+		ratio = float64(uploaded) / float64(size)
+	}
 
 	status := "downloading"
 	switch {
@@ -135,6 +143,8 @@ func (e *TorrentEngine) jobFor(t *torrent.Torrent) TorrentJob {
 		Peers: stats.TotalPeers, Seeds: stats.ConnectedSeeders,
 		Status: status, ETA: eta,
 		Dir: dir, AddedAt: added,
+		Uploaded: uploaded, Ratio: ratio,
+		Category: stCategory(st),
 		NumFiles: numFiles, PieceStates: pieceStates,
 	}
 }
@@ -230,4 +240,12 @@ func (e *TorrentEngine) DirFor(ih string) string {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.dirs[ih]
+}
+
+// stCategory returns the stored category for a torrent state entry (nil-safe).
+func stCategory(st *torrentStateEntry) string {
+	if st == nil {
+		return ""
+	}
+	return st.Category
 }
