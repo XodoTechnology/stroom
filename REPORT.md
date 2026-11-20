@@ -258,7 +258,7 @@ All findings actioned. Status per item:
 | ID | Status | Implementation |
 |----|--------|----------------|
 | SEC-01 | **Fixed** | `/api/jobs/*/open|reveal` return 403 when `!a.app.GUI` (headless); `openInFileManager` now reveals/selects the file in its directory (`explorer /select`, `open -R`, `xdg-open` on dir) — never executes the downloaded file itself. |
-| SEC-02 | **Fixed** | `allowedHost()` Host-header whitelist blocks DNS rebinding; state-changing methods require same-origin `Origin`/`Referer` when the header is present; token still constant-time compared (`subtle.ConstantTimeCompare`); `apikey` query/form param accepted for SABnzbd-compat clients. |
+| SEC-02 | **Fixed** | ``allowedHost()` Host-header check blocks DNS rebinding (IP literals + listen host + `STROOM_ALLOWED_HOSTS` permitted — rebinding requires a hostname); state-changing methods require same-origin `Origin`/`Referer` when the header is present; token still constant-time compared (`subtle.ConstantTimeCompare`); `apikey` query/form param accepted for SABnzbd-compat clients. |
 | SEC-03 | **Fixed** | `fetchAndRoute`/`FetchAndAdd`/`AddTorrentURL` go through `safeDialContext` — scheme allowlist (http/https) + reject loopback/link-local/unspecified destinations, applied per-redirect hop. `STROOM_ALLOW_LOCAL_FETCH=1` opts back in for LAN indexer use. |
 | SEC-04 | **Fixed** | `writeCmd` strips CR/LF/control chars before writing to the NNTP socket — blocks command injection through crafted message-ids/group names. |
 | SEC-05 | **Fixed** | Token comparison constant-time; `content-disposition`/`filename` sanitized via `sanitiseName` (path elements + control chars stripped). |
