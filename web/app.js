@@ -215,10 +215,9 @@ function wireEvents() {
     const b = e.target.closest("button[data-act]");
     if (b) {
       const { act, kind, id } = b.dataset;
+      if (act === "remove") { showRemoveModal(kind, id); return; }
       try {
-        const del = act === "remove" && confirm("Remove job? (downloaded files kept)");
-        if (act === "remove" && !del) return;
-        await postJSON(`/api/jobs/${kind}/${id}/${act}`, act === "remove" ? { deleteFiles: false } : {});
+        await postJSON(`/api/jobs/${kind}/${id}/${act}`, {});
       } catch (err) { toast(err.message); }
       return;
     }
@@ -356,6 +355,19 @@ function wireEvents() {
       toast(r.message || "updated — restart to apply");
       state.updateDismissed = true; $("#updateBar").classList.add("hidden");
     } catch (e) { toast(e.message); }
+  };
+
+  // remove modal
+  $("#btnRemoveCancel").onclick = () => $("#removeModal").classList.add("hidden");
+  $("#btnRemoveGo").onclick = async () => {
+    const rj = state.removeTarget;
+    $("#removeModal").classList.add("hidden");
+    if (!rj) return;
+    const delFiles = $("#removeDelFiles").checked;
+    try {
+      await postJSON(`/api/jobs/${rj.kind}/${rj.id}/remove`, { deleteFiles: delFiles });
+      toast(delFiles ? "removed + files deleted" : "removed");
+    } catch (err) { toast(err.message); }
   };
 
   // tracker modal
@@ -651,6 +663,14 @@ function ctxItems(kind, id, job) {
       } },
   );
   return items;
+}
+
+function showRemoveModal(kind, id) {
+  const job = findJob(kind, id);
+  state.removeTarget = { kind, id };
+  $("#removeMsg").textContent = `Remove "${job.name || id}" from the list?`;
+  $("#removeDelFiles").checked = false;
+  $("#removeModal").classList.remove("hidden");
 }
 
 async function removeJob(kind, id, delFiles) {
