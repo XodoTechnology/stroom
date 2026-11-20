@@ -90,7 +90,11 @@ func (a *apiServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // configured listen host, and any names in $STROOM_ALLOWED_HOSTS (comma-sep)
 // for reverse-proxy / domain access.
 func (a *apiServer) allowedHost(host string) bool {
-	if strings.EqualFold(host, "localhost") {
+	// Docker/container magic gateway names resolve via the container
+	// runtime's embedded DNS, not public DNS — they cannot be rebound.
+	switch strings.ToLower(host) {
+	case "localhost", "host.docker.internal", "host.containers.internal",
+		"gateway.docker.internal":
 		return true
 	}
 	if net.ParseIP(host) != nil {
