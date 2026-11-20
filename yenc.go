@@ -45,25 +45,67 @@ func decodeYEnc(body []byte) (*yEncResult, error) {
 		}
 	}
 
+	// Multi-part posts: =ybegin's size= is the WHOLE file's size; the part's
+	// own range is on =ypart begin=X end=Y (1-based, inclusive). Scan the
+	// leading control lines of the region for it.
+	region := body[dataStart:end]
+	partBegin, partEnd, multi := int64(-1), int64(-1), false
+	for scan := region; len(scan) > 0; {
+		nl := bytes.IndexByte(scan, '\n')
+		var line []byte
+		if nl < 0 {
+			line = scan
+		} else {
+			line = scan[:nl]
+		}
+		if bytes.HasPrefix(line, []byte("=ypart")) {
+			if v, ok := yencAttr(string(line), "begin"); ok {
+				partBegin, _ = strconv.ParseInt(v, 10, 64)
+			}
+			if v, ok := yencAttr(string(line), "end"); ok {
+				partEnd, _ = strconv.ParseInt(v, 10, 64)
+			}
+			multi = true
+			break
+		}
+		if !isYEncControlLine(line) || nl < 0 {
+			break // data (or EOF) reached: no =ypart present
+		}
+		scan = scan[nl+1:]
+	}
+
 	// Decode the region as a byte stream. Raw \n / \r\n are line
 	// terminators (encoded LF/CR are always escaped, so they never appear
 	// raw). '=' escapes may legally contain \n or \r as the second byte,
 	// so we can't decode strictly line-by-line. =y* keywords are only
 	// recognized at line starts and skipped.
-	region := body[dataStart:end]
 	out := make([]byte, 0, len(region))
 	out = appendYEncStream(out, region)
 	res.Data = out
-	if res.DeclaredSize >= 0 && int64(len(out)) != res.DeclaredSize {
+
+	// Expected decoded size: the part range for multi-part posts (tolerate
+	// 0-based begin encoders), else the =ybegin size= for single-part ones.
+	want := res.DeclaredSize
+	if multi && partEnd > partBegin && partBegin >= 0 {
+		want = partEnd - partBegin + 1
+	}
+	if want >= 0 && int64(len(out)) != want && !(multi && int64(len(out)) == want-1) {
 		// Size mismatch → treat as corrupt; caller will retry.
-		return res, fmt.Errorf("yenc size mismatch: got %d want %d", len(out), res.DeclaredSize)
+		return res, fmt.Errorf("yenc size mismatch: got %d want %d", len(out), want)
 	}
 	if yendLine != "" {
-		if crcStr, ok := yencAttr(yendLine, "crc32"); ok {
-			want, err := strconv.ParseUint(crcStr, 16, 32)
-			if err == nil {
+		// pcrc32 = CRC of THIS part (multi-part posts). crc32 on =yend of a
+		// multi-part post is the whole file's CRC — comparing it against one
+		// part's bytes would always mismatch, so only honour it for
+		// single-part articles.
+		crcStr, hasCRC := yencAttr(yendLine, "pcrc32")
+		if !hasCRC && !multi {
+			crcStr, hasCRC = yencAttr(yendLine, "crc32")
+		}
+		if hasCRC {
+			if w, err := strconv.ParseUint(crcStr, 16, 32); err == nil {
 				got := crc32.ChecksumIEEE(out)
-				res.CRCOK = uint32(want) == got
+				res.CRCOK = uint32(w) == got
 				if !res.CRCOK {
 					return res, fmt.Errorf("yenc crc32 mismatch")
 				}

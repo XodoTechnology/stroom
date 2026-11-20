@@ -125,3 +125,48 @@ func TestYEncMultipart(t *testing.T) {
 		t.Fatal("multipart reassembly mismatch")
 	}
 }
+
+// encodeYEncRealMultiPart models real-world posts: =ybegin's size= is the
+// WHOLE file's size, the part range is on =ypart, and =yend carries the
+// PART's crc as pcrc32 plus the whole file's crc32.
+func encodeYEncRealMultiPart(part []byte, fileSize, begin, end, totalParts int, fileCRC uint32) []byte {
+	var out bytes.Buffer
+	fmt.Fprintf(&out, "=ybegin part=%d total=%d line=128 size=%d name=file.rar\n", begin/len(part)+1, totalParts, fileSize)
+	fmt.Fprintf(&out, "=ypart begin=%d end=%d\n", begin, end)
+	for _, b := range part {
+		out.WriteByte(byte(int(b) + 42))
+	}
+	out.WriteByte('\n')
+	fmt.Fprintf(&out, "=yend size=%d part=%d pcrc32=%08X crc32=%08X\n",
+		end-begin+1, begin/len(part)+1, crc32.ChecksumIEEE(part), fileCRC)
+	return out.Bytes()
+}
+
+func TestYEncRealWorldMultiPart(t *testing.T) {
+	// File of 3 parts x 10 bytes; this article is part 2.
+	part2 := []byte("0123456789")
+	fileSize := 30
+	fileCRC := uint32(0xDEADBEEF) // whole-file crc — must NOT be checked vs part
+	body := encodeYEncRealMultiPart(part2, fileSize, 11, 20, 3, fileCRC)
+	res, err := decodeYEnc(body)
+	if err != nil {
+		t.Fatalf("decode multipart part: %v", err)
+	}
+	if !bytes.Equal(res.Data, part2) {
+		t.Fatalf("got %q want %q", res.Data, part2)
+	}
+	if !res.CRCOK {
+		t.Fatal("pcrc32 should have validated")
+	}
+}
+
+func TestYEncRealWorldMultiPartBadPCRC(t *testing.T) {
+	part := []byte("0123456789")
+	body := encodeYEncRealMultiPart(part, 30, 1, 10, 3, 0)
+	good := fmt.Sprintf("pcrc32=%08X", crc32.ChecksumIEEE(part))
+	bad := fmt.Sprintf("pcrc32=%08X", crc32.ChecksumIEEE(part)^0xFF)
+	body = bytes.Replace(body, []byte(good), []byte(bad), 1)
+	if _, err := decodeYEnc(body); err == nil {
+		t.Fatal("expected pcrc32 mismatch error")
+	}
+}

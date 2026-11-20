@@ -46,13 +46,16 @@ func dialNNTP(ctx context.Context, cfg NNTPServer) (*nntpClient, error) {
 		r:    bufio.NewReaderSize(conn, 256*1024),
 		w:    bufio.NewWriterSize(conn, 64*1024),
 	}
-	code, _, err := c.readStatus()
+	code, greetText, err := c.readStatus()
 	if err != nil {
 		conn.Close()
 		return nil, fmt.Errorf("greeting: %w", err)
 	}
 	if code != 200 {
 		conn.Close()
+		if connLimitText(greetText) {
+			return nil, fmt.Errorf("%w: %s", errConnLimit, greetText)
+		}
 		return nil, fmt.Errorf("nntp greeting code %d", code)
 	}
 	// MODE READER enables BODY; harmless if unsupported.
@@ -67,27 +70,43 @@ func dialNNTP(ctx context.Context, cfg NNTPServer) (*nntpClient, error) {
 }
 
 func (c *nntpClient) auth() error {
-	code, _, err := c.command("AUTHINFO USER %s", c.cfg.Username)
+	code, text, err := c.command("AUTHINFO USER %s", c.cfg.Username)
 	if err != nil {
 		return err
 	}
 	if code == 480 || code == 502 {
+		if connLimitText(text) {
+			return fmt.Errorf("%w: %s", errConnLimit, text)
+		}
 		return errors.New("server rejected auth user")
 	}
 	if code != 381 && code != 281 {
 		// Some servers accept PASS directly.
 	}
-	code, _, err = c.command("AUTHINFO PASS %s", c.cfg.Password)
+	code, text, err = c.command("AUTHINFO PASS %s", c.cfg.Password)
 	if err != nil {
 		return err
 	}
 	if code != 281 && code != 503 {
 		// 503 = auth accepted but not needed / transient
 		if code >= 400 {
+			if connLimitText(text) {
+				return fmt.Errorf("%w: %s", errConnLimit, text)
+			}
 			return fmt.Errorf("auth failed code %d", code)
 		}
 	}
 	return nil
+}
+
+// errConnLimit marks provider capacity refusals ("502 connection limit
+// reached", "too many connections"). Distinct from bad credentials: it is
+// transient and worth backing off + retrying rather than failing a fetch.
+var errConnLimit = errors.New("nntp connection limit reached")
+
+func connLimitText(text string) bool {
+	t := strings.ToLower(text)
+	return strings.Contains(t, "limit") || strings.Contains(t, "too many")
 }
 
 func (c *nntpClient) Close() {
@@ -148,6 +167,11 @@ var errNoSuchArticle = errors.New("no such article")
 // fetchBody retrieves an article body by message-id using BODY, falling back
 // to ARTICLE (headers stripped). Returns decoded NNTP payload (dot-unstuffed).
 func (c *nntpClient) fetchBody(msgID string) ([]byte, error) {
+	// Servers require the <id@host> form; NZBs commonly ship it bare, and a
+	// bare id is read as an article number (412 No newsgroup selected).
+	if !strings.HasPrefix(msgID, "<") {
+		msgID = "<" + msgID + ">"
+	}
 	code, payload, err := c.commandMulti("BODY %s", msgID)
 	if err == nil {
 		switch code {
@@ -269,6 +293,7 @@ func (p *nntpPool) signal() {
 }
 
 func (p *nntpPool) Acquire(ctx context.Context) (*nntpClient, error) {
+	limRetries := 0
 	for {
 		p.mu.Lock()
 		if p.closed {
@@ -295,6 +320,18 @@ func (p *nntpPool) Acquire(ctx context.Context) (*nntpClient, error) {
 				p.active--
 				p.signal()
 				p.mu.Unlock()
+				// Provider at capacity: back off and retry instead of
+				// burning the caller's fetch attempt. Bounded so a
+				// permanently saturated account still surfaces an error.
+				if errors.Is(err, errConnLimit) && limRetries < 10 {
+					limRetries++
+					select {
+					case <-ctx.Done():
+						return nil, ctx.Err()
+					case <-time.After(time.Duration(300*limRetries) * time.Millisecond):
+					}
+					continue
+				}
 				return nil, err
 			}
 			return c, nil

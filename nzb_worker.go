@@ -253,6 +253,7 @@ func (e *NZBEngine) fetchDecode(ctx context.Context, pool *nntpPool, msgID strin
 // so the caller retries rather than giving up on a temporarily-down server.
 func (e *NZBEngine) fetchFallback(ctx context.Context, primaryID, msgID string) ([]byte, error) {
 	var lastErr error
+	sawMissing := false
 	for _, srv := range e.app.servers() {
 		if srv.ID == primaryID {
 			continue
@@ -261,9 +262,16 @@ func (e *NZBEngine) fetchFallback(ctx context.Context, primaryID, msgID string) 
 		if err == nil {
 			return data, nil
 		}
-		if !errors.Is(err, errNoSuchArticle) {
+		if errors.Is(err, errNoSuchArticle) {
+			sawMissing = true
+		} else {
 			lastErr = err
 		}
+	}
+	// A reachable backbone confirming 430 settles it — the article is gone
+	// there; unreachable servers (dead creds, timeouts) can't help anyway.
+	if sawMissing {
+		return nil, errNoSuchArticle
 	}
 	if lastErr != nil {
 		return nil, lastErr
