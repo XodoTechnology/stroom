@@ -246,3 +246,47 @@ All findings and recommended features were implemented in this tree.
 - Seed-time limit is measured from first-observed-seeding in the current process (resets on restart).
 - qB shim covers the endpoints *arr tools need; it is not a full WebAPI.
 - `stroom add` cannot pass a category yet (API supports it; CLI flag is a trivial follow-up).
+
+---
+
+## Remediation Log — 2026-11-20
+
+All findings actioned. Status per item:
+
+### Security
+
+| ID | Status | Implementation |
+|----|--------|----------------|
+| SEC-01 | **Fixed** | `/api/jobs/*/open|reveal` return 403 when `!a.app.GUI` (headless); `openInFileManager` now reveals/selects the file in its directory (`explorer /select`, `open -R`, `xdg-open` on dir) — never executes the downloaded file itself. |
+| SEC-02 | **Fixed** | `allowedHost()` Host-header whitelist blocks DNS rebinding; state-changing methods require same-origin `Origin`/`Referer` when the header is present; token still constant-time compared (`subtle.ConstantTimeCompare`); `apikey` query/form param accepted for SABnzbd-compat clients. |
+| SEC-03 | **Fixed** | `fetchAndRoute`/`FetchAndAdd`/`AddTorrentURL` go through `safeDialContext` — scheme allowlist (http/https) + reject loopback/link-local/unspecified destinations, applied per-redirect hop. `STROOM_ALLOW_LOCAL_FETCH=1` opts back in for LAN indexer use. |
+| SEC-04 | **Fixed** | `writeCmd` strips CR/LF/control chars before writing to the NNTP socket — blocks command injection through crafted message-ids/group names. |
+| SEC-05 | **Fixed** | Token comparison constant-time; `content-disposition`/`filename` sanitized via `sanitiseName` (path elements + control chars stripped). |
+| SEC-06 | **Fixed** | `?token=` param stripped from URL via `history.replaceState` after cookie set (no token leak in address bar/history/referer); `multipart` uploads body-capped; request size caps enforced. |
+| SEC-07 | **Fixed** | Temp/lock files use `os.MkdirTemp`-style unique names under the job dir, not predictable shared paths. |
+
+### Bugs
+
+| ID | Status | Implementation |
+|----|--------|----------------|
+| BUG-01 | **Fixed** | Multi-file torrent piece hashing corrected (piece index computed across concatenated file spans). |
+| BUG-02 | **Fixed** | `j.mu` races on job map/stat fields resolved — stats mutated under lock. |
+| BUG-03 | **Fixed** | `NZBMissingAbortPct` honored — jobs abort early once missing articles exceed the % threshold (`nzb_worker` missing counter). |
+| BUG-04 | **Fixed** | UIToken clearable via Settings "Clear UI token" checkbox (`clearToken` → `uiToken=""`); CLI token flow verified. |
+| BUG-05 | **Fixed** | `App.Close()` now calls `a.NZB.Close()` — NZB engine goroutines/conn pool tear down on quit. |
+| BUG-06 | **Fixed** | `ServerName` populated on NZB jobs; global download rate limiter (`shared limiter`) now wraps NZB workers as well as torrent peer traffic. |
+| BUG-07 | **Fixed** | `Torrent.Dir` persisted to state; `Uploaded`/`Ratio` serialized in `torrent_stats`/`torrents()` response. |
+| BUG-08 | **Fixed** | `seedLimitLoop` enforces `SeedRatioLimit`/`SeedTimeMin` — pauses/removes seeded torrents past limits. |
+
+### Feature requests
+
+| # | Status | Implementation |
+|---|--------|----------------|
+| Categories / subdir routing | **Done** | `category` param on add routes downloads into `<dir>/<category>/`; exposed via API + settings. |
+| Seed-ratio / seed-time enforcement | **Done** | Settings UI fields + `seedLimitLoop` enforcer (above). |
+| Post-download unpack | **Done** | `unpack.go` — archive detection (rar/zip/7z incl. first-volume only) runs as a post-done stage. |
+| NNTP primary/fill/block tiers | **Done** | `BackupOnly`/priority tiers in server pool config — fill servers only engaged on article miss. |
+| SABnzbd API shim | **Done** | `sab.go` — `mode=queue|history|addurl|pause|resume|version|fullstatus|get_config` subset so Curator/Prowlarr can drive Stroom as a SAB client; `apikey` param auth. |
+| qBittorrent shim | **Done** | `qb.go` — `/api/v2/torrents/info|add|pause|resume|delete|properties` + login/cookie subset. |
+
+Deployed to `downloadbox` (23.134.88.253): binary replaced at `/opt/stroom/stroom` (prev kept as `stroom.bak2`), `systemctl restart stroom` → active, API answers (auth-gated 401 as expected). Commit `632edda`.
