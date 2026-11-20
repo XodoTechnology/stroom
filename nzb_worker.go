@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -172,9 +174,13 @@ func (e *NZBEngine) doSegment(ctx context.Context, j *NZBJob, rt *nzbRuntime, po
 			}
 		}
 		data, err := e.fetchDecode(ctx, pool, t.seg.MessageID)
+		if errors.Is(err, errNoSuchArticle) {
+			// Primary provider lacks it — another backbone may carry it.
+			data, err = e.fetchFallback(ctx, j.ServerID, t.seg.MessageID)
+		}
 		if err != nil {
 			if errors.Is(err, errNoSuchArticle) {
-				break // article genuinely missing; retrying won't help
+				break // article missing on every provider; retrying won't help
 			}
 			continue
 		}
@@ -239,6 +245,30 @@ func (e *NZBEngine) fetchDecode(ctx context.Context, pool *nntpPool, msgID strin
 		return nil, derr
 	}
 	return res.Data, nil
+}
+
+// fetchFallback asks every other configured server for an article the
+// primary reported missing (430). Returns the first hit. errNoSuchArticle
+// means every reachable server said 430; a transient error is returned as-is
+// so the caller retries rather than giving up on a temporarily-down server.
+func (e *NZBEngine) fetchFallback(ctx context.Context, primaryID, msgID string) ([]byte, error) {
+	var lastErr error
+	for _, srv := range e.app.servers() {
+		if srv.ID == primaryID {
+			continue
+		}
+		data, err := e.fetchDecode(ctx, e.poolFor(&srv), msgID)
+		if err == nil {
+			return data, nil
+		}
+		if !errors.Is(err, errNoSuchArticle) {
+			lastErr = err
+		}
+	}
+	if lastErr != nil {
+		return nil, lastErr
+	}
+	return nil, errNoSuchArticle
 }
 
 // partsDir returns the per-file parts directory.
@@ -392,14 +422,16 @@ func (e *NZBEngine) rebuildDoneFromDisk(j *NZBJob) {
 }
 
 // finalizeJob runs after feeder+workers exit; sets terminal status.
+// When PAR2 recovery files are present (and the par2 binary exists), the job
+// goes through "verifying" — par2 repairs missing/corrupt data, then the job
+// resolves to done or error.
 func (e *NZBEngine) finalizeJob(j *NZBJob, rt *nzbRuntime) {
 	close(rt.done)
 	j.mu.Lock()
-	defer j.mu.Unlock()
 	if j.Status == "done" || j.Status == "paused" {
+		j.mu.Unlock()
 		return
 	}
-	// Any incomplete files with failures → error; else if all complete handled above.
 	incomplete := false
 	for _, f := range j.Files {
 		if !f.Complete {
@@ -407,19 +439,188 @@ func (e *NZBEngine) finalizeJob(j *NZBJob, rt *nzbRuntime) {
 			break
 		}
 	}
-	if !incomplete {
+	verify := false
+	switch {
+	case j.Status == "paused":
+		// keep paused state
+	case !incomplete && par2ControlFile(j.Dir) != "" && par2Available():
+		verify = true // verify integrity; repairs only if needed
+		j.Status = "verifying"
+	case !incomplete:
 		j.Status = "done"
 		j.FinishedAt = time.Now()
-	} else {
-		// Paused jobs keep "paused"; others with failures → error.
-		if j.Status != "paused" {
-			j.Status = "error"
-			if j.Error == "" {
-				j.Error = "download incomplete"
+	case incomplete && par2ControlFile(j.Dir) != "" && par2Available():
+		verify = true // repair missing segments from recovery blocks
+		j.Status = "verifying"
+	case incomplete && par2ControlFile(j.Dir) != "":
+		j.Status = "error"
+		j.Error = "repair needed but par2 not installed"
+	default:
+		j.Status = "error"
+		if j.Error == "" {
+			j.Error = "download incomplete"
+		}
+	}
+	j.mu.Unlock()
+	e.persistSoon()
+	if verify {
+		go e.repairWithPar(j)
+	}
+}
+
+// repairWithPar runs par2 verify/repair in the job dir, then resolves the job.
+func (e *NZBEngine) repairWithPar(j *NZBJob) {
+	// Materialize incomplete files with zero-filled gaps so par2 treats them
+	// as damaged (repairable) rather than fully missing (not repairable
+	// unless recovery data covers the whole file).
+	for i := range j.Files {
+		if !j.Files[i].Complete {
+			if err := e.assembleGapped(j, i); err != nil {
+				j.mu.Lock()
+				j.Status = "error"
+				j.Error = fmt.Sprintf("assemble %s: %v", j.Files[i].Name, err)
+				j.mu.Unlock()
+				e.persistSoon()
+				return
 			}
 		}
 	}
+	ok, errStr := runPar2Repair(j.Dir)
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if j.Status != "verifying" {
+		return // paused/removed meanwhile
+	}
+	if ok {
+		for i := range j.Files {
+			j.Files[i].Complete = true
+			_ = os.RemoveAll(e.partsDir(j, i))
+		}
+		j.Status = "done"
+		j.FinishedAt = time.Now()
+		j.Error = ""
+	} else {
+		j.Status = "error"
+		j.Error = errStr
+	}
 	e.persistSoon()
+}
+
+// assembleGapped writes an incomplete file for par2 repair: present parts in
+// order, missing segments zero-filled. Gap size = decoded size implied by the
+// encoded/decoded ratio of present parts; the final segment's gap is clamped
+// so the file lands exactly at TotalBytes.
+func (e *NZBEngine) assembleGapped(j *NZBJob, fileIdx int) error {
+	f := j.Files[fileIdx]
+
+	// Learn encoded→decoded ratio from present parts (uniform per post).
+	var encSum, decSum int64
+	for pos := range f.SegList {
+		if st, err := os.Stat(e.partPath(j, fileIdx, pos)); err == nil {
+			decSum += st.Size()
+			encSum += f.SegList[pos].Bytes
+		}
+	}
+	gapFor := func(seg NZBSegment, pos int, written int64) int64 {
+		if pos == len(f.SegList)-1 && f.TotalBytes > written {
+			return f.TotalBytes - written
+		}
+		if encSum > 0 && seg.Bytes > 0 {
+			if g := seg.Bytes * decSum / encSum; g > 0 {
+				return g
+			}
+		}
+		if n := int64(len(f.SegList)); n > 0 && f.TotalBytes > 0 {
+			return f.TotalBytes / n
+		}
+		return 0
+	}
+
+	tmpPath := filepath.Join(j.Dir, f.Name+".assembling")
+	out, err := os.Create(tmpPath)
+	if err != nil {
+		return err
+	}
+	var written int64
+	zeros := make([]byte, 1<<20)
+	fail := func(e2 error) error { out.Close(); return e2 }
+	for pos, seg := range f.SegList {
+		pp := e.partPath(j, fileIdx, pos)
+		pf, rerr := os.Open(pp)
+		if rerr == nil {
+			n, werr := io.Copy(out, pf)
+			pf.Close()
+			if werr != nil {
+				return fail(werr)
+			}
+			written += n
+			continue
+		}
+		for gap := gapFor(seg, pos, written); gap > 0; {
+			chunk := gap
+			if chunk > int64(len(zeros)) {
+				chunk = int64(len(zeros))
+			}
+			if _, werr := out.Write(zeros[:chunk]); werr != nil {
+				return fail(werr)
+			}
+			gap -= chunk
+			written += chunk
+		}
+	}
+	if err := out.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, filepath.Join(j.Dir, f.Name))
+}
+
+// par2Available reports whether a par2cmdline binary is on PATH.
+func par2Available() bool {
+	_, err := exec.LookPath("par2")
+	return err == nil
+}
+
+// par2ControlFile finds a .par2 control file (non-volume preferred) in dir.
+func par2ControlFile(dir string) string {
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		return ""
+	}
+	volume := ""
+	for _, en := range ents {
+		n := strings.ToLower(en.Name())
+		if en.IsDir() || !strings.HasSuffix(n, ".par2") {
+			continue
+		}
+		if !strings.Contains(n, ".vol") {
+			return en.Name() // index/recovery control file
+		}
+		volume = en.Name()
+	}
+	return volume // only volume files found — still usable
+}
+
+// runPar2Repair executes `par2 repair` on the control file. par2 verifies
+// first and only rebuilds what's missing/corrupt; exit 0 = complete set.
+func runPar2Repair(dir string) (bool, string) {
+	ctrl := par2ControlFile(dir)
+	if ctrl == "" {
+		return true, ""
+	}
+	cmd := exec.Command("par2", "repair", "-q", "-q", ctrl)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		msg := strings.TrimSpace(string(out))
+		if len(msg) > 300 {
+			msg = msg[len(msg)-300:]
+		}
+		if msg == "" {
+			msg = err.Error()
+		}
+		return false, "par2: " + msg
+	}
+	return true, ""
 }
 
 var (
