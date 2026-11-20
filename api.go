@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	urlpkg "net/url"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -21,10 +22,11 @@ type apiServer struct {
 	app    *App
 	mux    *http.ServeMux
 	server *http.Server
+	addr   string
 }
 
 func newAPIServer(app *App, addr string) *apiServer {
-	a := &apiServer{app: app, mux: http.NewServeMux()}
+	a := &apiServer{app: app, mux: http.NewServeMux(), addr: addr}
 	a.routes()
 	a.server = &http.Server{
 		Addr:              addr,
@@ -40,7 +42,7 @@ func (a *apiServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if i := strings.LastIndex(host, ":"); i >= 0 && !strings.HasSuffix(host, "]") {
 		host = host[:i]
 	}
-	if !allowedHost(strings.Trim(host, "[]")) {
+	if !a.allowedHost(strings.Trim(host, "[]")) {
 		http.Error(w, "forbidden host", http.StatusForbidden)
 		return
 	}
@@ -83,14 +85,25 @@ func (a *apiServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	a.mux.ServeHTTP(w, r)
 }
 
-// allowedHost permits loopback hosts (and a wildcard listen addr) so the API
-// cannot be reached via attacker-controlled DNS names.
-func allowedHost(host string) bool {
-	if host == "localhost" || host == "127.0.0.1" || host == "::1" {
+// allowedHost permits IP literals (a DNS-rebinding attack requires a hostname
+// to re-resolve, so raw-IP Host headers cannot be rebound), localhost, the
+// configured listen host, and any names in $STROOM_ALLOWED_HOSTS (comma-sep)
+// for reverse-proxy / domain access.
+func (a *apiServer) allowedHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
 		return true
 	}
-	if ip := net.ParseIP(host); ip != nil {
-		return ip.IsLoopback()
+	if net.ParseIP(host) != nil {
+		return true
+	}
+	if listenHost, _, err := net.SplitHostPort(a.addr); err == nil &&
+		listenHost != "" && strings.EqualFold(host, listenHost) {
+		return true
+	}
+	for h := range strings.SplitSeq(os.Getenv("STROOM_ALLOWED_HOSTS"), ",") {
+		if h = strings.TrimSpace(h); h != "" && strings.EqualFold(host, h) {
+			return true
+		}
 	}
 	return false
 }
