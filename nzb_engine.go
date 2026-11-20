@@ -463,11 +463,17 @@ func (e *NZBEngine) ActiveCount() int {
 	return n
 }
 
-// GlobalDownSpeed sums active NZB download speeds.
+// GlobalDownSpeed sums the cached per-job download speeds (updated by
+// snapshotLocked during List()). Must not resample here — a second sample
+// taken microseconds after List() would zero out rt.down for the snapshot.
 func (e *NZBEngine) GlobalDownSpeed() int64 {
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	var sum int64
-	for _, j := range e.List() {
-		sum += j.DownSpeed
+	for _, rt := range e.runtimes {
+		rt.mu.Lock()
+		sum += rt.down
+		rt.mu.Unlock()
 	}
 	return sum
 }
