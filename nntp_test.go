@@ -75,6 +75,7 @@ func (f *fakeNNTP) handle(conn net.Conn) {
 			}
 		case strings.HasPrefix(upper, "BODY "), strings.HasPrefix(upper, "ARTICLE "):
 			id := strings.TrimSpace(line[strings.IndexByte(line, ' ')+1:])
+			id = strings.TrimPrefix(strings.TrimSuffix(id, ">"), "<") // real servers accept <id>; map keys are bare
 			body, ok := f.articles[id]
 			if !ok {
 				fmt.Fprintln(w, "430 no such article")

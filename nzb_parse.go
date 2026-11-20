@@ -15,7 +15,9 @@ import (
 type NZBSegment struct {
 	Number    int    `xml:"number,attr" json:"n"`
 	Bytes     int64  `xml:"bytes,attr" json:"b,omitempty"`
-	MessageID string `xml:"nzb" json:"id"`
+	// NZB spec: <segment bytes="N" number="N">message-id@host</segment>
+	// — the id is the element's character data, not a child element.
+	MessageID string `xml:",chardata" json:"id"`
 }
 
 // NZBFileElement is a <file> element in the NZB.

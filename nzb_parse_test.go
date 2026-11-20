@@ -13,15 +13,15 @@ const testNZB = `<?xml version="1.0" encoding="iso-8859-1" ?>
  <file poster="a@b" date="123" subject="[1/1] - &quot;movie.mkv&quot; yEnc (1/1)" bytes="1000">
   <groups><group>alt.binaries</group></groups>
   <segments>
-   <segment bytes="500" number="1"><nzb>msg1@news</nzb></segment>
-   <segment bytes="500" number="2"><nzb>msg2@news</nzb></segment>
-   <segment bytes="500" number="2"><nzb>msg2dup@news</nzb></segment>
-   <segment bytes="500" number="1"><nzb>msg1dup@news</nzb></segment>
+   <segment bytes="500" number="1">msg1@news</segment>
+   <segment bytes="500" number="2">msg2@news</segment>
+   <segment bytes="500" number="2">msg2dup@news</segment>
+   <segment bytes="500" number="1">msg1dup@news</segment>
   </segments>
  </file>
  <file poster="a@b" date="123" subject="[1/1] - &quot;subs.srt&quot; yEnc (1/1)" bytes="200">
   <segments>
-   <segment bytes="200" number="1"><nzb>msg3@news</nzb></segment>
+   <segment bytes="200" number="1">msg3@news</segment>
   </segments>
  </file>
 </nzb>`
@@ -46,6 +46,9 @@ func TestParseNZB(t *testing.T) {
 	}
 	if f0.Segments[0].Number != 1 || f0.Segments[1].Number != 2 {
 		t.Fatalf("segments not sorted/deduped: %+v", f0.Segments)
+	}
+	if f0.Segments[0].MessageID != "msg1@news" {
+		t.Fatalf("message-id not parsed from chardata: %q", f0.Segments[0].MessageID)
 	}
 	if doc.Files[1].Name != "subs.srt" {
 		t.Fatalf("file2 name: %q", doc.Files[1].Name)

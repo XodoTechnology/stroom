@@ -426,11 +426,15 @@ func (e *NZBEngine) snapshotLocked(j *NZBJob) *NZBJob {
 	cp.SegmentsTotal = segs
 	cp.SegmentsDone = segDone
 	cp.SegmentsFailed = segFail
-	if total > 0 {
+	// Progress: segments, not bytes — TotalBytes is the encoded (yEnc)
+	// size while DoneBytes is decoded payload, so byte math caps ~97%.
+	if segs > 0 {
+		cp.Progress = float64(segDone) / float64(segs)
+	} else if total > 0 {
 		cp.Progress = float64(done) / float64(total)
-		if cp.Progress > 1 {
-			cp.Progress = 1
-		}
+	}
+	if cp.Progress > 1 {
+		cp.Progress = 1
 	}
 	// speed from runtime
 	if rt := e.runtimes[j.ID]; rt != nil {

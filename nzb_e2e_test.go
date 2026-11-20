@@ -39,8 +39,8 @@ func TestNZBEndToEnd(t *testing.T) {
 <nzb xmlns="http://www.newzbin.com/DTD/2003/nzb">
  <file poster="a@b" date="1" subject="[1/1] - &quot;e2e.txt&quot; yEnc (1/1)" bytes="%d">
   <segments>
-   <segment bytes="%d" number="1"><nzb>seg1@news</nzb></segment>
-   <segment bytes="%d" number="2"><nzb>seg2@news</nzb></segment>
+   <segment bytes="%d" number="1">seg1@news</segment>
+   <segment bytes="%d" number="2">seg2@news</segment>
   </segments>
  </file>
 </nzb>`, len(part1)+len(part2), len(part1), len(part2))
