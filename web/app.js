@@ -136,7 +136,8 @@ function renderServers(list) {
   $("#serverRows").innerHTML = list.map(s => `<tr>
     <td>${esc(s.name || s.host)}</td><td>${esc(s.host)}</td><td>${s.port}</td>
     <td>${s.tls ? "TLS" : "—"}</td><td>${esc(s.username || "—")}</td><td>${s.connections}</td>
-    <td><button class="mini" data-srvedit="${esc(s.id)}">edit</button>
+    <td><button class="mini" data-srvtest="${esc(s.id)}">test</button>
+        <button class="mini" data-srvedit="${esc(s.id)}">edit</button>
         <button class="mini danger" data-srvdel="${esc(s.id)}">✕</button></td>
   </tr>`).join("");
   // refresh add-dialog server select
@@ -232,6 +233,16 @@ function wireEvents() {
     if (fb) {
       const i = fb.dataset.files.indexOf(":");
       toggleFiles(fb.dataset.files.slice(0, i), fb.dataset.files.slice(i + 1));
+      return;
+    }
+    const st = e.target.closest("button[data-srvtest]");
+    if (st) {
+      st.disabled = true; st.textContent = "…";
+      try {
+        const r = await api(`/api/servers/${encodeURIComponent(st.dataset.srvtest)}/test`, { method: "POST" });
+        toast(r.ok ? `server OK (${r.ms}ms)` : `server failed: ${r.error}`);
+      } catch (err) { toast("server test: " + err); }
+      st.disabled = false; st.textContent = "test";
       return;
     }
     const se = e.target.closest("button[data-srvedit]");

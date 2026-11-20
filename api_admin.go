@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -8,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // ---------- job actions ----------
@@ -211,6 +213,34 @@ func (a *apiServer) handleServersSet(w http.ResponseWriter, r *http.Request) {
 	}
 	a.app.NZB.ResetPools()
 	writeJSONResp(w, map[string]any{"ok": true})
+}
+
+// POST /api/servers/{id}/test — dial + greeting + auth roundtrip; reports
+// latency so users can verify credentials/connectivity from the UI.
+func (a *apiServer) handleServerTest(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var srv *NNTPServer
+	for _, s := range a.app.servers() {
+		if s.ID == id {
+			cp := s
+			srv = &cp
+			break
+		}
+	}
+	if srv == nil {
+		writeErr(w, 404, "server not found")
+		return
+	}
+	start := time.Now()
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	c, err := dialNNTP(ctx, *srv)
+	if err != nil {
+		writeJSONResp(w, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	_ = c.conn.Close()
+	writeJSONResp(w, map[string]any{"ok": true, "ms": time.Since(start).Milliseconds()})
 }
 
 func (a *apiServer) handleServerDelete(w http.ResponseWriter, r *http.Request) {

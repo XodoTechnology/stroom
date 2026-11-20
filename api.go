@@ -40,6 +40,17 @@ func (a *apiServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
+		// First visit carries ?token= — persist it as a cookie so static
+		// assets (css/js) and later API calls authenticate without the param.
+		if r.URL.Query().Get("token") == tok && cookieToken(r) != tok {
+			http.SetCookie(w, &http.Cookie{
+				Name:     "stroom_token",
+				Value:    tok,
+				Path:     "/",
+				HttpOnly: true,
+				SameSite: http.SameSiteLaxMode,
+			})
+		}
 	}
 	a.mux.ServeHTTP(w, r)
 }
@@ -73,6 +84,7 @@ func (a *apiServer) routes() {
 	m.HandleFunc("GET /api/jobs/torrent/{id}/details", a.handleDetails)
 	m.HandleFunc("GET /api/servers", a.handleServersGet)
 	m.HandleFunc("POST /api/servers", a.handleServersSet)
+	m.HandleFunc("POST /api/servers/{id}/test", a.handleServerTest)
 	m.HandleFunc("DELETE /api/servers/{id}", a.handleServerDelete)
 	m.HandleFunc("GET /api/update", a.handleUpdateGet)
 	m.HandleFunc("POST /api/update/check", a.handleUpdateCheck)
