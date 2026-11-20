@@ -50,6 +50,11 @@ type Config struct {
 	UploadLimit   int64 `json:"uploadLimit"`
 	// Default NZB worker connections per server.
 	NZBMaxConnections int `json:"nzbMaxConnections"`
+	// Abort an NZB job early when this fraction of attempted segments is
+	// missing on every provider (SABnzbd-style dead-post cutoff). A small
+	// minimum sample applies so early flukes don't kill recoverable posts.
+	// 0 disables.
+	NZBMissingAbortPct float64 `json:"nzbMissingAbortPct"`
 	// News servers for NZB downloads.
 	NNTPServers []NNTPServer `json:"nntpServers"`
 	// Watch folder: auto-add .torrent/.nzb files dropped here.
@@ -67,13 +72,14 @@ func DefaultConfig() Config {
 		home = "."
 	}
 	return Config{
-		ListenAddr:        "127.0.0.1:8080",
-		DownloadDir:       filepath.Join(home, "Downloads", "Stroom"),
-		BTListenPort:      6881,
-		EnableDHT:         true,
-		EnableUPnP:        true,
-		EnablePEX:         true,
-		NZBMaxConnections: 12,
+		ListenAddr:         "127.0.0.1:8080",
+		DownloadDir:        filepath.Join(home, "Downloads", "Stroom"),
+		BTListenPort:       6881,
+		EnableDHT:          true,
+		EnableUPnP:         true,
+		EnablePEX:          true,
+		NZBMaxConnections:  12,
+		NZBMissingAbortPct: 0.20,
 	}
 }
 

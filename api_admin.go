@@ -270,18 +270,19 @@ func (a *apiServer) handleSettingsGet(w http.ResponseWriter, r *http.Request) {
 
 func (a *apiServer) handleSettingsSet(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		ListenAddr        *string `json:"listenAddr"`
-		DownloadDir       *string `json:"downloadDir"`
-		BTListenPort      *int    `json:"btListenPort"`
-		EnableDHT         *bool   `json:"enableDHT"`
-		EnableUPnP        *bool   `json:"enableUpnp"`
-		EnablePEX         *bool   `json:"enablePex"`
-		DownloadLimit     *int64  `json:"downloadLimit"`
-		UploadLimit       *int64  `json:"uploadLimit"`
-		NZBMaxConnections *int    `json:"nzbMaxConnections"`
-		UIToken           *string `json:"uiToken"`
-		DisableWebUI      *bool   `json:"disableWebUI"`
-		WatchDir          *string `json:"watchDir"`
+		ListenAddr         *string  `json:"listenAddr"`
+		DownloadDir        *string  `json:"downloadDir"`
+		BTListenPort       *int     `json:"btListenPort"`
+		EnableDHT          *bool    `json:"enableDHT"`
+		EnableUPnP         *bool    `json:"enableUpnp"`
+		EnablePEX          *bool    `json:"enablePex"`
+		DownloadLimit      *int64   `json:"downloadLimit"`
+		UploadLimit        *int64   `json:"uploadLimit"`
+		NZBMaxConnections  *int     `json:"nzbMaxConnections"`
+		NZBMissingAbortPct *float64 `json:"nzbMissingAbortPct"`
+		UIToken            *string  `json:"uiToken"`
+		DisableWebUI       *bool    `json:"disableWebUI"`
+		WatchDir           *string  `json:"watchDir"`
 	}
 	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil {
 		writeErr(w, http.StatusBadRequest, "bad json")
@@ -317,6 +318,9 @@ func (a *apiServer) handleSettingsSet(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.NZBMaxConnections != nil {
 		cfg.NZBMaxConnections = *req.NZBMaxConnections
+	}
+	if req.NZBMissingAbortPct != nil {
+		cfg.NZBMissingAbortPct = *req.NZBMissingAbortPct
 	}
 	if req.UIToken != nil {
 		cfg.UIToken = *req.UIToken

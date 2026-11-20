@@ -61,9 +61,12 @@ type NZBJob struct {
 	SegmentsDone   int             `json:"segmentsDone"`
 	SegmentsFailed int             `json:"segmentsFailed"`
 	Files          []*NZBFileState `json:"files"`
-	AddedAt        time.Time       `json:"addedAt"`
-	StartedAt      time.Time       `json:"startedAt,omitempty"`
-	FinishedAt     time.Time       `json:"finishedAt,omitempty"`
+	// Aborted marks a job killed early by the missing-articles cutoff —
+	// finalize skips the (hopeless) par2 repair attempt.
+	Aborted    bool      `json:"aborted,omitempty"`
+	AddedAt    time.Time `json:"addedAt"`
+	StartedAt  time.Time `json:"startedAt,omitempty"`
+	FinishedAt time.Time `json:"finishedAt,omitempty"`
 
 	// runtime-only (not persisted)
 	doneSet   map[string]map[int]bool

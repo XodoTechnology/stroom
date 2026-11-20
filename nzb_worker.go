@@ -18,6 +18,9 @@ const (
 	nzbMaxAttempts    = 3
 	nzbPartsDirName   = ".parts"
 	nzbDefaultWorkers = 12
+	// nzbAbortMinSample is the minimum attempted segments before the
+	// missing-articles cutoff is evaluated (avoids early-fluke kills).
+	nzbAbortMinSample = 200
 )
 
 // segTask is one article download unit.
@@ -220,12 +223,32 @@ func (e *NZBEngine) doSegment(ctx context.Context, j *NZBJob, rt *nzbRuntime, po
 		return
 	}
 	// Failed after retries — nothing was committed, just record it.
+	abort := false
 	j.mu.Lock()
 	if !j.failedSet[f.Name][t.seg.Number] {
 		f.Failed = append(f.Failed, t.seg.Number)
 		j.failedSet[f.Name][t.seg.Number] = true
 	}
+	// SABnzbd-style dead-post cutoff: if too many attempted articles are
+	// missing on every provider, the rest of the post is almost certainly
+	// gone too — stop hammering servers and fail the job now.
+	if pct := e.app.configSnapshot().NZBMissingAbortPct; pct > 0 && !j.Aborted {
+		var attempted, failed int
+		for _, fj := range j.Files {
+			attempted += fj.SegDone + len(fj.Failed)
+			failed += len(fj.Failed)
+		}
+		if attempted >= nzbAbortMinSample && float64(failed)/float64(attempted) > pct {
+			j.Aborted = true
+			j.Error = fmt.Sprintf("aborted: %d of %d attempted articles missing (%.0f%% > %.0f%% cutoff)",
+				failed, attempted, 100*float64(failed)/float64(attempted), 100*pct)
+			abort = true
+		}
+	}
 	j.mu.Unlock()
+	if abort {
+		rt.cancel()
+	}
 }
 
 // fetchDecode gets article body and yEnc-decodes it.
@@ -451,6 +474,10 @@ func (e *NZBEngine) finalizeJob(j *NZBJob, rt *nzbRuntime) {
 	switch {
 	case j.Status == "paused":
 		// keep paused state
+	case j.Aborted:
+		// Killed by missing-articles cutoff — the post is dead; repairing
+		// tens of thousands of gaps via par2 is hopeless and slow.
+		j.Status = "error"
 	case !incomplete && par2ControlFile(j.Dir) != "" && par2Available():
 		verify = true // verify integrity; repairs only if needed
 		j.Status = "verifying"

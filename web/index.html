@@ -82,6 +82,7 @@
       <label>Download limit (KiB/s, 0=∞) <input name="downloadLimit" type="number" min="0"></label>
       <label>Upload limit (KiB/s, 0=∞) <input name="uploadLimit" type="number" min="0"></label>
       <label>NZB connections/server <input name="nzbMaxConnections" type="number" min="1" max="64"></label>
+      <label>Abort NZB when missing articles exceed % <input name="nzbMissingAbortPct" type="number" min="0" max="100" step="1" placeholder="20"></label>
       <label class="chk"><input name="enableDHT" type="checkbox"> Enable DHT</label>
       <label class="chk"><input name="enableUpnp" type="checkbox"> Enable UPnP</label>
       <label class="chk"><input name="enablePex" type="checkbox"> Enable peer exchange</label>

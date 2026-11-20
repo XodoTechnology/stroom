@@ -172,6 +172,7 @@ function loadSettingsIntoForm(c) {
   f.downloadLimit.value = c.downloadLimit ? Math.round(c.downloadLimit / 1024) : "";
   f.uploadLimit.value = c.uploadLimit ? Math.round(c.uploadLimit / 1024) : "";
   f.nzbMaxConnections.value = c.nzbMaxConnections || 12;
+  f.nzbMissingAbortPct.value = Math.round((c.nzbMissingAbortPct ?? 0.20) * 100);
   f.enableDHT.checked = !!c.enableDHT;
   f.enableUpnp.checked = !!c.enableUpnp;
   f.enablePex.checked = !!c.enablePex;
@@ -380,6 +381,7 @@ function wireEvents() {
       downloadLimit: (parseInt(fd.get("downloadLimit") || "0", 10) || 0) * 1024,
       uploadLimit: (parseInt(fd.get("uploadLimit") || "0", 10) || 0) * 1024,
       nzbMaxConnections: parseInt(fd.get("nzbMaxConnections") || "12", 10),
+      nzbMissingAbortPct: (parseFloat(fd.get("nzbMissingAbortPct") || "20") || 20) / 100,
       enableDHT: fd.get("enableDHT") === "on",
       enableUpnp: fd.get("enableUpnp") === "on",
       enablePex: fd.get("enablePex") === "on",
