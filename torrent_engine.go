@@ -214,13 +214,13 @@ type torrentOnlyState struct {
 
 func (e *TorrentEngine) Save() error {
 	e.mu.Lock()
-	defer e.mu.Unlock()
 	ts := torrentOnlyState{}
 	for _, ih := range e.order {
 		if s, ok := e.states[ih]; ok {
 			ts.Torrents = append(ts.Torrents, *s)
 		}
 	}
+	e.mu.Unlock()
 	return writeJSON(e.statePath(), ts)
 }
 

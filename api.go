@@ -1,6 +1,7 @@
 package main
 
 import (
+	"sync"
 	"context"
 	"crypto/subtle"
 	"encoding/base64"
@@ -23,6 +24,11 @@ type apiServer struct {
 	mux    *http.ServeMux
 	server *http.Server
 	addr   string
+
+	snapMu       sync.Mutex
+	snap         snapshot
+	snapAt       time.Time
+	snapBuilding bool
 }
 
 func newAPIServer(app *App, addr string) *apiServer {
@@ -242,7 +248,40 @@ func (a *apiServer) buildSnapshot() snapshot {
 }
 
 func (a *apiServer) handleState(w http.ResponseWriter, r *http.Request) {
-	writeJSONResp(w, a.buildSnapshot())
+	writeJSONResp(w, a.snapshotNow())
+}
+
+// snapshotNow returns a cached snapshot, refreshing in the background when
+// stale so request latency never depends on torrent-engine lock contention.
+const snapshotTTL = 1200 * time.Millisecond
+
+func (a *apiServer) snapshotNow() snapshot {
+	a.snapMu.Lock()
+	if !a.snapAt.IsZero() {
+		s := a.snap
+		stale := time.Since(a.snapAt) > snapshotTTL
+		if stale && !a.snapBuilding {
+			a.snapBuilding = true
+			go a.refreshSnapshot()
+		}
+		a.snapMu.Unlock()
+		return s
+	}
+	a.snapBuilding = true
+	a.snapMu.Unlock()
+
+	s := a.buildSnapshot()
+	a.snapMu.Lock()
+	a.snap, a.snapAt, a.snapBuilding = s, time.Now(), false
+	a.snapMu.Unlock()
+	return s
+}
+
+func (a *apiServer) refreshSnapshot() {
+	s := a.buildSnapshot()
+	a.snapMu.Lock()
+	a.snap, a.snapAt, a.snapBuilding = s, time.Now(), false
+	a.snapMu.Unlock()
 }
 
 func (a *apiServer) handleEvents(w http.ResponseWriter, r *http.Request) {
@@ -260,7 +299,7 @@ func (a *apiServer) handleEvents(w http.ResponseWriter, r *http.Request) {
 	defer tick.Stop()
 	var last string
 	for {
-		b, _ := json.Marshal(a.buildSnapshot())
+		b, _ := json.Marshal(a.snapshotNow())
 		if string(b) != last {
 			last = string(b)
 			fmt.Fprintf(w, "data: %s\n\n", b)

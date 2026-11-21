@@ -183,14 +183,21 @@ func (e *NZBEngine) statePath() string {
 }
 
 func (e *NZBEngine) Save() error {
+	// Grab job pointers under e.mu only — a worker holding j.mu across
+	// disk I/O (rebuild, assemble) must not stall e.mu and every
+	// add/list behind it. Snapshot, marshal and write all happen after
+	// releasing it.
 	e.mu.Lock()
-	defer e.mu.Unlock()
-	var out nzbStateFile
+	jobs := make([]*NZBJob, 0, len(e.order))
 	for _, id := range e.order {
-		j := e.jobs[id]
-		if j == nil {
-			continue
+		if j := e.jobs[id]; j != nil {
+			jobs = append(jobs, j)
 		}
+	}
+	e.mu.Unlock()
+
+	var out nzbStateFile
+	for _, j := range jobs {
 		j.mu.Lock()
 		files := make([]*NZBFileState, len(j.Files))
 		for i, f := range j.Files {
@@ -444,12 +451,16 @@ func (e *NZBEngine) rebuildOrder() {
 
 func (e *NZBEngine) List() []*NZBJob {
 	e.mu.Lock()
-	defer e.mu.Unlock()
-	out := make([]*NZBJob, 0, len(e.order))
+	jobs := make([]*NZBJob, 0, len(e.order))
 	for _, id := range e.order {
 		if j := e.jobs[id]; j != nil {
-			out = append(out, e.snapshotLocked(j))
+			jobs = append(jobs, j)
 		}
+	}
+	e.mu.Unlock()
+	out := make([]*NZBJob, 0, len(jobs))
+	for _, j := range jobs {
+		out = append(out, e.snapshotLocked(j))
 	}
 	return out
 }

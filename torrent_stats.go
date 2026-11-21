@@ -130,10 +130,8 @@ func (e *TorrentEngine) jobFor(t *torrent.Torrent) TorrentJob {
 	}
 
 	numFiles := 0
-	var pieceStates string
 	if t.Info() != nil {
 		numFiles = len(t.Files())
-		pieceStates = t.PieceStateRuns().String()
 	}
 
 	return TorrentJob{
@@ -145,7 +143,7 @@ func (e *TorrentEngine) jobFor(t *torrent.Torrent) TorrentJob {
 		Dir: dir, AddedAt: added,
 		Uploaded: uploaded, Ratio: ratio,
 		Category: stCategory(st),
-		NumFiles: numFiles, PieceStates: pieceStates,
+		NumFiles: numFiles,
 	}
 }
 
