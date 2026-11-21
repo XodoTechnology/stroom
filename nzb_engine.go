@@ -244,9 +244,14 @@ func (e *NZBEngine) Load() error {
 			e.rebuildDoneFromDisk(job)
 			job.mu.Lock()
 			resume := job.Status == "downloading" || job.Status == "queued"
+			verify := job.Status == "verifying"
 			job.mu.Unlock()
 			if resume {
 				e.resumeJob(job)
+			} else if verify {
+				// Restarted mid-PAR2 — the repair goroutine died with
+				// the process; respawn it so the job resolves.
+				go e.repairWithPar(job)
 			}
 		}(j)
 	}
